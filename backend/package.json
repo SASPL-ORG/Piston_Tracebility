@@ -1,0 +1,24 @@
+{
+  "name": "piston-traceability-backend",
+  "version": "2.0.0",
+  "description": "Piston Traceability API - Fastify backend",
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.0.1",
+    "dotenv": "^16.4.7",
+    "fastify": "^5.3.3",
+    "json2csv": "^6.0.0-alpha.2",
+    "mssql": "^11.0.1"
+  },
+  "devDependencies": {
+    "@types/mssql": "^9.1.11",
+    "@types/node": "^22.13.5",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}

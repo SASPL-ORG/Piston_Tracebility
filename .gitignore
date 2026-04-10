@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+tools/node_modules/
+
+# Build output
+backend/dist/
+frontend/dist/
+
+# Docker tar images (too large for git)
+docker-images/
+release/
+
+# Environment files (contains credentials)
+.env
+
+# Data directories
+data/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Claude
+.claude/
+
+# Release packaging
+release-files/

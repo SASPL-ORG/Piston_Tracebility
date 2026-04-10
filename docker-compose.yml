@@ -1,0 +1,53 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: traceability-backend
+    # Backend port not exposed - only accessible through nginx
+    environment:
+      - DB_HOST=${DB_HOST:-localhost}
+      - DB_PORT=${DB_PORT:-1433}
+      - DB_NAME=${DB_NAME:-SAM}
+      - DB_USER=${DB_USER:-sa}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_TRUST_SERVER_CERTIFICATE=${DB_TRUST_SERVER_CERTIFICATE:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - NODE_ENV=production
+    volumes:
+      - ./data/exports:/data/exports
+      - ./data/logs:/data/logs
+      - ./data/license:/data/license
+    networks:
+      - traceability-network
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: traceability-ui
+    # UI port not exposed - served through nginx
+    networks:
+      - traceability-network
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+  nginx:
+    image: nginx:alpine
+    container_name: traceability-nginx
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+    networks:
+      - traceability-network
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - ui
+
+networks:
+  traceability-network:
+    driver: bridge
