@@ -18,6 +18,11 @@ services:
       - ./data/exports:/data/exports
       - ./data/logs:/data/logs
       - ./data/license:/data/license
+      # Image integration: CV-X live output → indexed/organized destination.
+      # Both bind to the SCADA host's D: drive; the backend reads/writes via
+      # /data/incoming and /data/images inside the container.
+      - "D:/Keyence - CVX:/data/incoming"
+      - "D:/Records Actual:/data/images"
     networks:
       - traceability-network
     restart: unless-stopped

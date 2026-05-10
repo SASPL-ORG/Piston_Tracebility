@@ -7,8 +7,10 @@ import listRoutes from './routes/lists.js';
 import partRoutes from './routes/parts.js';
 import maintenanceRoutes from './routes/maintenance.js';
 import licenseRoutes from './routes/license.js';
+import imageRoutes from './routes/images.js';
 import { isLicenseActive } from './license/license.js';
 import { getPool, closePool } from './db/connection.js';
+import { startImageSubsystem, stopImageSubsystem } from './images/index.js';
 
 const app = Fastify({
   logger: {
@@ -35,14 +37,30 @@ async function start() {
   await app.register(listRoutes);
   await app.register(partRoutes);
   await app.register(maintenanceRoutes);
+  await app.register(imageRoutes);
 
   // Test DB connection on startup
+  let dbConnected = false;
   try {
     const pool = await getPool();
     await pool.request().query('SELECT 1');
     app.log.info('Database connected successfully');
+    dbConnected = true;
   } catch (err) {
     app.log.error('Database connection failed: %s', (err as Error).message);
+  }
+
+  // Image subsystem (file watcher + retry/retention cron). Requires DB.
+  if (dbConnected) {
+    try {
+      await startImageSubsystem({
+        info: (m) => app.log.info(m),
+        warn: (m) => app.log.warn(m),
+        error: (m) => app.log.error(m),
+      });
+    } catch (err) {
+      app.log.error('Image subsystem failed to start: %s', (err as Error).message);
+    }
   }
 
   // Log license status
@@ -59,6 +77,7 @@ async function start() {
 
 async function shutdown() {
   app.log.info('Shutting down...');
+  await stopImageSubsystem().catch(() => undefined);
   await app.close();
   await closePool();
   process.exit(0);

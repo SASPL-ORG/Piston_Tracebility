@@ -6,7 +6,7 @@ interface KpiCardProps {
   value: string | number;
   subtitle?: string;
   icon: LucideIcon;
-  color: 'blue' | 'green' | 'red' | 'amber' | 'purple';
+  color: 'blue' | 'green' | 'red' | 'amber' | 'purple' | 'indigo' | 'slate';
 }
 
 const colorMap = {
@@ -15,6 +15,8 @@ const colorMap = {
   red: { bg: 'bg-red-50', icon: 'text-red-600', border: 'border-red-100' },
   amber: { bg: 'bg-amber-50', icon: 'text-amber-600', border: 'border-amber-100' },
   purple: { bg: 'bg-purple-50', icon: 'text-purple-600', border: 'border-purple-100' },
+  indigo: { bg: 'bg-indigo-50', icon: 'text-indigo-600', border: 'border-indigo-100' },
+  slate: { bg: 'bg-slate-50', icon: 'text-slate-600', border: 'border-slate-100' },
 };
 
 export default function KpiCard({ title, value, subtitle, icon: Icon, color }: KpiCardProps) {

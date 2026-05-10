@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { format, subDays } from 'date-fns';
-import { Package, CheckCircle, XCircle, AlertTriangle, Percent, RefreshCw } from 'lucide-react';
+import { format } from 'date-fns';
+import { Package, CheckCircle, XCircle, AlertTriangle, Percent, RefreshCw, Clock, RotateCw } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import KpiCard from '../components/KpiCard';
 import DateRangePicker from '../components/DateRangePicker';
@@ -9,8 +9,9 @@ import { fetchDashboard, fetchPlants, DashboardResponse } from '../lib/api';
 const PIE_COLORS = ['#10b981', '#ef4444', '#f59e0b', '#6366f1', '#8b5cf6'];
 
 export default function Dashboard() {
-  const [from, setFrom] = useState(format(subDays(new Date(), 7), 'yyyy-MM-dd'));
-  const [to, setTo] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const today = format(new Date(), 'yyyy-MM-dd');
+  const [from, setFrom] = useState(today);
+  const [to, setTo] = useState(today);
   const [plant, setPlant] = useState('');
   const [plants, setPlants] = useState<string[]>([]);
   const [data, setData] = useState<DashboardResponse | null>(null);
@@ -79,12 +80,14 @@ export default function Dashboard() {
 
       {/* KPI Cards */}
       {data && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-          <KpiCard title="Total Parts" value={data.kpis.total.toLocaleString()} icon={Package} color="blue" subtitle="Total inspected" />
-          <KpiCard title="Passed" value={data.kpis.passed.toLocaleString()} icon={CheckCircle} color="green" subtitle="Overall PASS" />
-          <KpiCard title="Circlip Fail" value={data.kpis.circlip_fail.toLocaleString()} icon={XCircle} color="red" subtitle="Circlip failures" />
-          <KpiCard title="Ring Fail" value={data.kpis.ring_fail.toLocaleString()} icon={AlertTriangle} color="amber" subtitle="Ring failures" />
-          <KpiCard title="Pass Rate" value={`${data.kpis.pass_rate}%`} icon={Percent} color="purple" subtitle="Overall yield" />
+        <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-7 gap-4">
+          <KpiCard title="Total Parts" value={data.kpis.total.toLocaleString()} icon={Package} color="blue" subtitle="Distinct parts" />
+          <KpiCard title="Passed" value={data.kpis.passed.toLocaleString()} icon={CheckCircle} color="green" subtitle="Packed + Ring OK" />
+          <KpiCard title="Circlip Fail" value={data.kpis.circlip_fail.toLocaleString()} icon={XCircle} color="red" subtitle="Scrapped" />
+          <KpiCard title="Ring Fail" value={data.kpis.ring_fail.toLocaleString()} icon={AlertTriangle} color="amber" subtitle="Ring rejected" />
+          <KpiCard title="In Progress" value={data.kpis.in_progress.toLocaleString()} icon={Clock} color="purple" subtitle="Ring not yet recorded" />
+          <KpiCard title="Reinspected" value={data.kpis.reinspected.toLocaleString()} icon={RotateCw} color="indigo" subtitle="Multi-attempt parts" />
+          <KpiCard title="Pass Rate" value={`${data.kpis.pass_rate}%`} icon={Percent} color="slate" subtitle="Overall yield" />
         </div>
       )}
 

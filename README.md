@@ -26,11 +26,17 @@
    **For Windows:** Use `host.docker.internal\INSTANCE_NAME` for DB_HOST
    **For Linux:** Use the actual IP address or hostname
 
-3. **Configure CV-X Image Folder (Important):**
-   - Create a Windows shared folder (e.g., `D:\TraceabilityData\incoming`)
-   - Share it on the network (e.g., `\\APP-PC\trace_images`)
-   - Configure CV-X VisionEditor to save images to this shared folder
-   - Update `INCOMING_IMAGES_PATH` in `.env` if using a different path
+3. **Configure CV-X image folders (Important):**
+   - The backend reads from `D:\Keyence - CVX` (CV-X live output) and writes
+     organized images to `D:\Records Actual` (DMC-rooted, attempt-grouped).
+     Both folders are auto-created by `start.bat` if missing.
+   - CV-X VisionEditor must save to `D:\Keyence - CVX` directly (no SMB share
+     needed — it's a local path on the SCADA box).
+   - To override either path, edit `.env`:
+     - `INCOMING_IMAGES_PATH` (container path; default `/data/incoming`)
+     - `IMAGES_OUTPUT_PATH` (container path; default `/data/images`)
+     - The Windows-side host paths are configured in `docker-compose.yml`
+       under the `backend.volumes:` block.
 
 4. **Load Docker images:**
    - Double-click `load-images.bat`
@@ -72,26 +78,46 @@ To allow clients to access via IP address:
 - All API calls go through nginx reverse proxy
 - Clients can only access the web UI
 
-## CV-X Camera Setup
+## Image Integration
 
-The application uses a folder watcher to receive images from CV-X controllers:
+The backend container watches `D:\Keyence - CVX` for new CV-X images, matches
+them to the corresponding `SAM_Log` inspection event, and moves each image
+into a structured destination tree under `D:\Records Actual`.
 
-1. **Create Windows Shared Folder:**
-   - Create folder: `D:\TraceabilityData\incoming` (or your preferred location)
-   - Right-click → Properties → Sharing
-   - Share as: `\\APP-PC\trace_images` (use your PC name)
-   - Give Full access (read/write)
+### CV-X side
 
-2. **Configure CV-X VisionEditor:**
-   - Go to: `[Output] → [Image Save]` or `[FTP/Network Output]`
-   - Set output type: **Shared folder (SMB)**
-   - Path: `\\APP-PC\trace_images` (match your share name)
-   - Username/password: Windows PC credentials
-   - Enable: ☑ Save image
+1. **Save folder rule** (configured in CV-X VisionEditor, Image Save settings):
+   - Save to: `D:\Keyence - CVX\[yymmdd]_[hhmmss]\[CAMn]\[CAM Judgment]\`
+2. **Filename rule**:
+   - `{DMC_SUFFIX}_{OK_FLAG}_CAM{N}_{COUNTER:10digits}.jpg`
+   - `DMC_SUFFIX` is the part of the DMC after the static prefix; the camera
+     strips the prefix automatically.
+   - `OK_FLAG`: `0` = OK, `1` = NG (per-image quality flag).
+   - `CAM1` = Ring camera, `CAM2` = Circlip camera (overridable via env).
+3. The session folder name (`yymmdd_hhmmss`) is just a storage bucket — the
+   backend uses the SAM_Log timestamps, not the folder name, to group images
+   into inspection events. CV-X is allowed to split a single inspection across
+   multiple session folders.
 
-3. **File Naming Format:**
-   - Ring camera: `{SERIAL}_RING_{ATTEMPT}_{PICNO}.jpg` (e.g., `PST1001_RING_02_01.jpg`)
-   - Circlip camera: `{SERIAL}_CIRCLIP_00_{PICNO}.jpg` (e.g., `PST1001_CIRCLIP_00_01.jpg`)
+### Destination layout
+
+The backend writes to `D:\Records Actual\<DMC>\<CIRCLIP|RING>\attempt_<N>\<OK|NG>\<original-filename>.jpg`.
+This makes images discoverable both from the UI (Image Viewer page) and by
+hand on the file system. Original filenames are preserved.
+
+### Tunables (`.env`)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DMC_STATIC_PREFIX` | `[)>.06-VTH16-P234102` | The fixed prefix the camera strips |
+| `CAM_RING` / `CAM_CIRCLIP` | `CAM1` / `CAM2` | CAM-to-inspection-type mapping |
+| `EXPECTED_RING_PICTURES_PER_ATTEMPT` | `25` | Drives the "Missing N images" badge |
+| `EXPECTED_CIRCLIP_PICTURES_PER_ATTEMPT` | `1` | Same, for circlip |
+| `IMAGE_MATCH_TOLERANCE_SECONDS` | `300` | ± window when matching image to SAM_Log |
+| `IMAGE_PENDING_TIMEOUT_MINUTES` | `15` | How long to wait for a SAM_Log row before giving up |
+| `IMAGE_FILE_HANDLING` | `move` | `move` or `copy` |
+| `IMAGE_RETENTION_DAYS` | `365` | Daily FIFO purge |
+| `IMAGE_WATCH_USE_POLLING` | `true` | inotify is unreliable across Windows bind-mounts |
 
 ## Troubleshooting
 
@@ -109,10 +135,16 @@ The application uses a folder watcher to receive images from CV-X controllers:
 - Verify firewall allows port 8080
 
 ### Images not appearing
-- Verify CV-X is saving images to the shared folder
-- Check `data/incoming` folder has files
-- Verify folder watcher configuration in `.env`
-- Check image-service logs: `docker-compose logs image-service`
+- Verify CV-X is writing files into `D:\Keyence - CVX` on the SCADA box.
+- Confirm the bind mount in `docker-compose.yml` resolves: from inside the
+  backend container, `/data/incoming` should list incoming files.
+- Check the indexer has not stalled: `docker-compose logs backend | findstr "[images]"`.
+- Check the pending queue: `GET /api/admin/images/pending` — files that
+  arrived before their SAM_Log row land here and resolve via the 1-minute
+  retry job.
+- Alarm log table `dbo.Alarm_Log` records `IMAGE_PARSE_FAIL` (filename
+  didn't match) and `IMAGE_NO_INSPECTION_FOUND` (timed out without a SAM_Log
+  match) for diagnosis.
 
 ## Support
 

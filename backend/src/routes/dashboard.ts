@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { getPool } from '../db/connection.js';
+import { bindFilterInputs, buildLatestPerDmcCte, STATE_CASE_SQL } from '../db/state.js';
 import type { DashboardResponse } from '../types/index.js';
 
 interface DashboardQuery {
@@ -10,75 +11,63 @@ interface DashboardQuery {
 
 export default async function dashboardRoutes(app: FastifyInstance) {
   app.get<{ Querystring: DashboardQuery }>('/dashboard', async (req) => {
-    const { from, to, plant } = req.query;
+    const filters = req.query;
     const pool = await getPool();
 
-    const conditions: string[] = [];
-    const request = pool.request();
+    // KPIs: classify each DMC's latest-row state, then aggregate.
+    const kpiRequest = pool.request();
+    const kpiConds = bindFilterInputs(kpiRequest, filters);
+    const kpiCte = buildLatestPerDmcCte(kpiConds);
 
-    if (from) {
-      conditions.push('Date_Time >= @from');
-      request.input('from', from);
-    }
-    if (to) {
-      conditions.push('Date_Time <= @to');
-      request.input('to', to + ' 23:59:59.999');
-    }
-    if (plant) {
-      conditions.push('Plant_Id = @plant');
-      request.input('plant', plant);
-    }
-
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-
-    // KPIs
-    const kpiResult = await request.query(`
+    const kpiResult = await kpiRequest.query(`
+      ${kpiCte}
       SELECT
-        COUNT(*) as total,
-        SUM(CASE WHEN Result = 'PASS' THEN 1 ELSE 0 END) as passed,
-        SUM(CASE WHEN Circlip_Result = 'FAIL' THEN 1 ELSE 0 END) as circlip_fail,
-        SUM(CASE WHEN Ring_Result = 'FAIL' THEN 1 ELSE 0 END) as ring_fail,
-        SUM(CASE WHEN Result != 'PASS' OR Result IS NULL THEN 1 ELSE 0 END) as overall_fail
-      FROM dbo.SAM_Log
-      ${whereClause}
+        COUNT(DISTINCT l.DMC) AS total,
+        SUM(CASE WHEN ${STATE_CASE_SQL} IN ('PACKED','RING_OK') THEN 1 ELSE 0 END) AS passed,
+        SUM(CASE WHEN ${STATE_CASE_SQL} = 'CIRCLIP_SCRAP' THEN 1 ELSE 0 END) AS circlip_fail,
+        SUM(CASE WHEN ${STATE_CASE_SQL} = 'RING_NG' THEN 1 ELSE 0 END) AS ring_fail,
+        SUM(CASE WHEN ${STATE_CASE_SQL} = 'IN_PROGRESS' THEN 1 ELSE 0 END) AS in_progress,
+        SUM(CASE WHEN p.max_ring_count > 1 THEN 1 ELSE 0 END) AS reinspected
+      FROM latest l
+      INNER JOIN per_dmc p ON p.DMC = l.DMC
     `);
 
-    const kpiRow = kpiResult.recordset[0];
+    const kpiRow = kpiResult.recordset[0] || {};
     const total = kpiRow.total || 0;
     const passed = kpiRow.passed || 0;
 
-    // Hourly breakdown - new request needed since inputs are consumed
+    // Hourly breakdown: bucket by latest row's Date_Time, classify the same way.
     const hourlyRequest = pool.request();
-    if (from) hourlyRequest.input('from', from);
-    if (to) hourlyRequest.input('to', to + ' 23:59:59.999');
-    if (plant) hourlyRequest.input('plant', plant);
+    const hourlyConds = bindFilterInputs(hourlyRequest, filters);
+    const hourlyCte = buildLatestPerDmcCte(hourlyConds);
 
     const hourlyResult = await hourlyRequest.query(`
+      ${hourlyCte}
       SELECT
-        FORMAT(Date_Time, 'yyyy-MM-dd HH:00') as hour,
-        SUM(CASE WHEN Result = 'PASS' THEN 1 ELSE 0 END) as passed,
-        SUM(CASE WHEN Result != 'PASS' OR Result IS NULL THEN 1 ELSE 0 END) as failed
-      FROM dbo.SAM_Log
-      ${whereClause}
-      GROUP BY FORMAT(Date_Time, 'yyyy-MM-dd HH:00')
+        FORMAT(l.Date_Time, 'yyyy-MM-dd HH:00') AS hour,
+        SUM(CASE WHEN ${STATE_CASE_SQL} IN ('PACKED','RING_OK') THEN 1 ELSE 0 END) AS passed,
+        SUM(CASE WHEN ${STATE_CASE_SQL} NOT IN ('PACKED','RING_OK') THEN 1 ELSE 0 END) AS failed
+      FROM latest l
+      INNER JOIN per_dmc p ON p.DMC = l.DMC
+      GROUP BY FORMAT(l.Date_Time, 'yyyy-MM-dd HH:00')
       ORDER BY hour
     `);
 
-    // Plant breakdown
+    // Plant breakdown: same classification, grouped by latest row's Plant_Id.
     const plantRequest = pool.request();
-    if (from) plantRequest.input('from', from);
-    if (to) plantRequest.input('to', to + ' 23:59:59.999');
-    if (plant) plantRequest.input('plant', plant);
+    const plantConds = bindFilterInputs(plantRequest, filters);
+    const plantCte = buildLatestPerDmcCte(plantConds);
 
     const plantResult = await plantRequest.query(`
+      ${plantCte}
       SELECT
-        Plant_Id as plant_id,
-        COUNT(*) as total,
-        SUM(CASE WHEN Result = 'PASS' THEN 1 ELSE 0 END) as passed
-      FROM dbo.SAM_Log
-      ${whereClause}
-      GROUP BY Plant_Id
-      ORDER BY Plant_Id
+        l.Plant_Id AS plant_id,
+        COUNT(DISTINCT l.DMC) AS total,
+        SUM(CASE WHEN ${STATE_CASE_SQL} IN ('PACKED','RING_OK') THEN 1 ELSE 0 END) AS passed
+      FROM latest l
+      INNER JOIN per_dmc p ON p.DMC = l.DMC
+      GROUP BY l.Plant_Id
+      ORDER BY l.Plant_Id
     `);
 
     const response: DashboardResponse = {
@@ -87,7 +76,8 @@ export default async function dashboardRoutes(app: FastifyInstance) {
         passed,
         circlip_fail: kpiRow.circlip_fail || 0,
         ring_fail: kpiRow.ring_fail || 0,
-        overall_fail: kpiRow.overall_fail || 0,
+        in_progress: kpiRow.in_progress || 0,
+        reinspected: kpiRow.reinspected || 0,
         pass_rate: total > 0 ? Math.round((passed / total) * 1000) / 10 : 0,
       },
       hourly_breakdown: hourlyResult.recordset,
@@ -97,7 +87,7 @@ export default async function dashboardRoutes(app: FastifyInstance) {
     return response;
   });
 
-  // Get distinct plant IDs for filter dropdown
+  // Distinct plant IDs for the filter dropdown.
   app.get('/plants', async () => {
     const pool = await getPool();
     const result = await pool.request().query(`

@@ -1,51 +1,73 @@
 import { useState, useEffect, useCallback } from 'react';
-import { format, subDays } from 'date-fns';
+import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
-import { Download, ArrowUpDown, ExternalLink } from 'lucide-react';
+import { Download, ArrowUpDown, ExternalLink, RotateCw } from 'lucide-react';
 import DateRangePicker from '../components/DateRangePicker';
 import Pagination from '../components/Pagination';
 import ResultBadge from '../components/ResultBadge';
-import { fetchList, fetchPlants, getExportUrl, SamLogRecord, PaginatedResponse } from '../lib/api';
+import StateBadge from '../components/StateBadge';
+import {
+  fetchList,
+  fetchPlants,
+  getExportUrl,
+  formatDateTime,
+  PartListItem,
+  PaginatedResponse,
+  ListType,
+} from '../lib/api';
 
-const TYPE_OPTIONS = [
+const TYPE_OPTIONS: { value: ListType; label: string }[] = [
   { value: 'all', label: 'All Results' },
-  { value: 'pass', label: 'Pass Only' },
-  { value: 'fail', label: 'Fail Only' },
-  { value: 'circlip_fail', label: 'Circlip Fail' },
-  { value: 'ring_fail', label: 'Ring Fail' },
+  { value: 'passed', label: 'Passed' },
+  { value: 'circlip_scrap', label: 'Circlip Scrap' },
+  { value: 'ring_rejected', label: 'Ring Rejected' },
+  { value: 'reinspected', label: 'Reinspected' },
+  { value: 'in_progress', label: 'In Progress' },
+  { value: 'packed', label: 'Packed' },
 ];
 
 const COLUMNS = [
   { key: 'Date_Time', label: 'Date / Time' },
   { key: 'Plant_Id', label: 'Plant' },
   { key: 'DMC', label: 'DMC' },
+  { key: 'state', label: 'State' },
   { key: 'Circlip_Result', label: 'Circlip' },
   { key: 'Circlip_Time', label: 'Circlip Time' },
   { key: 'Ring_Result', label: 'Ring' },
   { key: 'Ring_Time', label: 'Ring Time' },
-  { key: 'Ring_Count', label: 'Ring Count' },
+  { key: 'total_attempts', label: 'Attempts' },
   { key: 'Unloading_Time', label: 'Unload Time' },
-  { key: 'Result', label: 'Result' },
 ];
 
 export default function Lists() {
   const navigate = useNavigate();
-  const [from, setFrom] = useState(format(subDays(new Date(), 7), 'yyyy-MM-dd'));
-  const [to, setTo] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const today = format(new Date(), 'yyyy-MM-dd');
+  const [from, setFrom] = useState(today);
+  const [to, setTo] = useState(today);
   const [plant, setPlant] = useState('');
   const [plants, setPlants] = useState<string[]>([]);
-  const [type, setType] = useState('all');
+  const [type, setType] = useState<ListType>('all');
   const [page, setPage] = useState(1);
   const [sort, setSort] = useState('Date_Time');
   const [order, setOrder] = useState<'asc' | 'desc'>('desc');
-  const [data, setData] = useState<PaginatedResponse<SamLogRecord> | null>(null);
+  const [data, setData] = useState<PaginatedResponse<PartListItem> | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
 
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await fetchList({ type, from, to, plant: plant || undefined, page, size: 50, sort, order, search: search || undefined });
+      const result = await fetchList({
+        type,
+        from,
+        to,
+        plant: plant || undefined,
+        page,
+        size: 50,
+        sort,
+        order,
+        search: search || undefined,
+      });
       setData(result);
     } catch {
       setData(null);
@@ -54,8 +76,12 @@ export default function Lists() {
     }
   }, [type, from, to, plant, page, sort, order, search]);
 
-  useEffect(() => { fetchPlants().then(setPlants).catch(() => {}); }, []);
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    fetchPlants().then(setPlants).catch(() => {});
+  }, []);
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const handleDateChange = (newFrom: string, newTo: string, newPlant: string) => {
     setFrom(newFrom);
@@ -74,11 +100,6 @@ export default function Lists() {
     setPage(1);
   };
 
-  const formatDate = (v: string | null) => {
-    if (!v) return '-';
-    try { return format(new Date(v), 'dd-MM-yyyy HH:mm:ss'); } catch { return v; }
-  };
-
   const exportUrl = getExportUrl({ type, from, to, plant: plant || undefined, sort, order });
 
   return (
@@ -95,11 +116,16 @@ export default function Lists() {
             <label className="text-xs text-gray-500 font-medium">Type:</label>
             <select
               value={type}
-              onChange={(e) => { setType(e.target.value); setPage(1); }}
+              onChange={(e) => {
+                setType(e.target.value as ListType);
+                setPage(1);
+              }}
               className="px-3 py-1.5 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
             >
               {TYPE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
               ))}
             </select>
           </div>
@@ -110,7 +136,10 @@ export default function Lists() {
             type="text"
             placeholder="Search DMC..."
             value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1);
+            }}
             className="px-3 py-1.5 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 w-48"
           />
           <a
@@ -147,32 +176,57 @@ export default function Lists() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {loading ? (
-                <tr><td colSpan={COLUMNS.length} className="px-4 py-12 text-center text-gray-400">Loading...</td></tr>
+                <tr>
+                  <td colSpan={COLUMNS.length} className="px-4 py-12 text-center text-gray-400">
+                    Loading...
+                  </td>
+                </tr>
               ) : data && data.data.length > 0 ? (
                 data.data.map((row, i) => (
                   <tr key={i} className="hover:bg-gray-50/50 transition-colors">
-                    <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDate(row.Date_Time)}</td>
+                    <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDateTime(row.Date_Time)}</td>
                     <td className="px-4 py-3 whitespace-nowrap text-gray-600">{row.Plant_Id || '-'}</td>
                     <td className="px-4 py-3 whitespace-nowrap">
-                      <button
-                        onClick={() => navigate(`/part-trace?dmc=${encodeURIComponent(row.DMC || '')}`)}
-                        className="text-blue-600 hover:text-blue-800 font-medium inline-flex items-center gap-1"
-                      >
-                        {row.DMC || '-'}
-                        <ExternalLink size={12} />
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => navigate(`/part-trace?dmc=${encodeURIComponent(row.DMC || '')}`)}
+                          className="text-blue-600 hover:text-blue-800 font-medium inline-flex items-center gap-1"
+                        >
+                          {row.DMC || '-'}
+                          <ExternalLink size={12} />
+                        </button>
+                        {row.reinspected && (
+                          <span
+                            title={`${row.total_attempts} ring attempts`}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200"
+                          >
+                            <RotateCw size={10} />
+                            Reinspected
+                          </span>
+                        )}
+                      </div>
                     </td>
-                    <td className="px-4 py-3 whitespace-nowrap"><ResultBadge value={row.Circlip_Result} /></td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <StateBadge state={row.state} />
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <ResultBadge value={row.Circlip_Result} />
+                    </td>
                     <td className="px-4 py-3 whitespace-nowrap text-gray-500">{row.Circlip_Time || '-'}</td>
-                    <td className="px-4 py-3 whitespace-nowrap"><ResultBadge value={row.Ring_Result} /></td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <ResultBadge value={row.Ring_Result} />
+                    </td>
                     <td className="px-4 py-3 whitespace-nowrap text-gray-500">{row.Ring_Time || '-'}</td>
-                    <td className="px-4 py-3 whitespace-nowrap text-gray-500">{row.Ring_Count ?? '-'}</td>
+                    <td className="px-4 py-3 whitespace-nowrap text-gray-700 font-medium">{row.total_attempts}</td>
                     <td className="px-4 py-3 whitespace-nowrap text-gray-500">{row.Unloading_Time || '-'}</td>
-                    <td className="px-4 py-3 whitespace-nowrap"><ResultBadge value={row.Result} /></td>
                   </tr>
                 ))
               ) : (
-                <tr><td colSpan={COLUMNS.length} className="px-4 py-12 text-center text-gray-400">No records found</td></tr>
+                <tr>
+                  <td colSpan={COLUMNS.length} className="px-4 py-12 text-center text-gray-400">
+                    No records found
+                  </td>
+                </tr>
               )}
             </tbody>
           </table>

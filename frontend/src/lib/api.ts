@@ -9,6 +9,8 @@ async function fetchJson<T>(url: string): Promise<T> {
   return res.json();
 }
 
+export type PartState = 'PACKED' | 'RING_OK' | 'RING_NG' | 'CIRCLIP_SCRAP' | 'IN_PROGRESS';
+
 export interface SamLogRecord {
   Date_Time: string | null;
   Plant_Id: string | null;
@@ -22,12 +24,19 @@ export interface SamLogRecord {
   Result: string | null;
 }
 
+export interface PartListItem extends SamLogRecord {
+  state: PartState;
+  reinspected: boolean;
+  total_attempts: number;
+}
+
 export interface DashboardKpis {
   total: number;
   passed: number;
   circlip_fail: number;
   ring_fail: number;
-  overall_fail: number;
+  in_progress: number;
+  reinspected: number;
   pass_rate: number;
 }
 
@@ -57,10 +66,20 @@ export interface PaginatedResponse<T> {
   total_pages: number;
 }
 
+export interface PartTraceSummary {
+  state: PartState;
+  total_attempts: number;
+  reinspected: boolean;
+  latest: SamLogRecord;
+  first_seen: string | null;
+  last_seen: string | null;
+}
+
 export interface PartResponse {
   dmc: string;
   total_records: number;
   records: SamLogRecord[];
+  summary: PartTraceSummary;
 }
 
 export function fetchDashboard(from: string, to: string, plant?: string): Promise<DashboardResponse> {
@@ -73,8 +92,17 @@ export function fetchPlants(): Promise<string[]> {
   return fetchJson('/plants');
 }
 
+export type ListType =
+  | 'all'
+  | 'passed'
+  | 'circlip_scrap'
+  | 'ring_rejected'
+  | 'reinspected'
+  | 'in_progress'
+  | 'packed';
+
 export interface ListParams {
-  type?: string;
+  type?: ListType;
   from?: string;
   to?: string;
   plant?: string;
@@ -85,7 +113,7 @@ export interface ListParams {
   search?: string;
 }
 
-export function fetchList(params: ListParams): Promise<PaginatedResponse<SamLogRecord>> {
+export function fetchList(params: ListParams): Promise<PaginatedResponse<PartListItem>> {
   const searchParams = new URLSearchParams();
   Object.entries(params).forEach(([key, val]) => {
     if (val !== undefined && val !== '') searchParams.set(key, String(val));
@@ -147,4 +175,95 @@ export function getExportUrl(params: ListParams): string {
     if (val !== undefined && val !== '') searchParams.set(key, String(val));
   });
   return `${BASE_URL}/export?${searchParams}`;
+}
+
+// Display helpers ---------------------------------------------------------
+
+// Read the wall-clock components from a backend ISO string (YYYY-MM-DDTHH:MM:SS+ZZ:ZZ)
+// without converting to the browser's timezone, so the display matches what
+// SSMS would show on the SCADA box regardless of viewer locale.
+export function formatDateTime(iso: string | null): string {
+  if (!iso) return '-';
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return iso;
+  const [, y, mo, d, h, mi, s] = m;
+  return `${d}-${mo}-${y} ${h}:${mi}:${s}`;
+}
+
+export const PART_STATE_LABEL: Record<PartState, string> = {
+  PACKED: 'Packed',
+  RING_OK: 'Ring OK',
+  RING_NG: 'Ring Rejected',
+  CIRCLIP_SCRAP: 'Circlip Scrap',
+  IN_PROGRESS: 'In Progress',
+};
+
+// PLC-emitted timestamp strings (Circlip_Time, Ring_Time, Unloading_Time) are
+// passed through as-is — no unit suffix.
+export function formatTimestamp(value: string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '-';
+  return value;
+}
+
+// ---- Images ------------------------------------------------------------
+
+export interface ImageItem {
+  id: number;
+  picture_no: number;
+  ok_flag: 0 | 1;
+  camera_id: string;
+  captured_at: string | null;
+}
+
+export interface ImageGroup {
+  inspection_type: 'CIRCLIP' | 'RING';
+  ring_count: number | null;
+  expected: number;
+  indexed: number;
+  images: ImageItem[];
+}
+
+export interface PartImagesResponse {
+  dmc: string;
+  groups: ImageGroup[];
+}
+
+export interface ImageGroupSummary {
+  inspection_type: 'CIRCLIP' | 'RING';
+  ring_count: number | null;
+  expected: number;
+  indexed: number;
+}
+
+export interface PartImagesSummaryResponse {
+  dmc: string;
+  groups: ImageGroupSummary[];
+}
+
+export function fetchPartImages(dmc: string): Promise<PartImagesResponse> {
+  return fetchJson(`/part/${encodeURIComponent(dmc)}/images`);
+}
+
+export function fetchPartImagesSummary(dmc: string): Promise<PartImagesSummaryResponse> {
+  return fetchJson(`/part/${encodeURIComponent(dmc)}/images/summary`);
+}
+
+export function imageSrc(id: number): string {
+  return `${BASE_URL}/image/${id}`;
+}
+
+export function groupKey(group: { inspection_type: string; ring_count: number | null }): string {
+  return `${group.inspection_type}-${group.ring_count ?? 'na'}`;
+}
+
+export function groupTitle(group: { inspection_type: string; ring_count: number | null }): string {
+  if (group.inspection_type === 'CIRCLIP') return 'Circlip Inspection';
+  return `Ring Attempt ${group.ring_count ?? 1}`;
+}
+
+// Reserved for true millisecond durations. No callers today; here so future code
+// does not fall back to formatTimestamp + ' ms'.
+export function formatDuration(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || isNaN(ms)) return '-';
+  return `${ms} ms`;
 }

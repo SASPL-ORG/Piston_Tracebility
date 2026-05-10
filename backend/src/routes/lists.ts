@@ -1,11 +1,30 @@
 import { FastifyInstance } from 'fastify';
 import { getPool } from '../db/connection.js';
-import type { PaginatedResponse, SamLogRecord } from '../types/index.js';
+import {
+  bindFilterInputs,
+  buildLatestPerDmcCte,
+  STATE_CASE_SQL,
+} from '../db/state.js';
+import { serializeDateTimeFields } from '../db/datetime.js';
+import type { PaginatedResponse, PartListItem } from '../types/index.js';
 
-const VALID_SORT_COLUMNS = [
-  'Date_Time', 'Plant_Id', 'DMC', 'Circlip_Result', 'Circlip_Time',
-  'Ring_Result', 'Ring_Time', 'Ring_Count', 'Unloading_Time', 'Result',
-];
+// Sort whitelist — these are columns on the latest row plus derived columns.
+// The values map to the SQL column name in the inner SELECT.
+const SORT_COLUMNS: Record<string, string> = {
+  Date_Time: 'Date_Time',
+  Plant_Id: 'Plant_Id',
+  DMC: 'DMC',
+  Circlip_Result: 'Circlip_Result',
+  Circlip_Time: 'Circlip_Time',
+  Ring_Result: 'Ring_Result',
+  Ring_Time: 'Ring_Time',
+  Ring_Count: 'Ring_Count',
+  Unloading_Time: 'Unloading_Time',
+  Result: 'Result',
+  state: 'state',
+  total_attempts: 'total_attempts',
+  reinspected: 'reinspected',
+};
 
 interface ListQuery {
   type?: string;
@@ -19,97 +38,135 @@ interface ListQuery {
   search?: string;
 }
 
-function buildWhereClause(query: ListQuery, request: any): string {
-  const conditions: string[] = [];
+function buildTypeWhere(type: string | undefined): string {
+  switch (type) {
+    case 'passed':
+      return "state IN ('PACKED','RING_OK')";
+    case 'packed':
+      return "state = 'PACKED'";
+    case 'circlip_scrap':
+      return "state = 'CIRCLIP_SCRAP'";
+    case 'ring_rejected':
+      return "state = 'RING_NG'";
+    case 'in_progress':
+      return "state = 'IN_PROGRESS'";
+    case 'reinspected':
+      return 'reinspected = 1';
+    default:
+      return '1 = 1';
+  }
+}
 
-  if (query.from) {
-    conditions.push('Date_Time >= @from');
-    request.input('from', query.from);
-  }
-  if (query.to) {
-    conditions.push('Date_Time <= @to');
-    request.input('to', query.to + ' 23:59:59.999');
-  }
-  if (query.plant) {
-    conditions.push('Plant_Id = @plant');
-    request.input('plant', query.plant);
-  }
+function buildBaseCte(query: ListQuery, request: import('mssql').Request): string {
+  const conds = bindFilterInputs(request, query);
   if (query.search) {
-    conditions.push('DMC LIKE @search');
+    conds.push('DMC LIKE @search');
     request.input('search', `%${query.search}%`);
   }
+  return buildLatestPerDmcCte(conds);
+}
 
-  switch (query.type) {
-    case 'pass':
-      conditions.push("Result = 'PASS'");
-      break;
-    case 'fail':
-      conditions.push("(Result = 'FAIL' OR Result IS NULL)");
-      break;
-    case 'circlip_fail':
-      conditions.push("Circlip_Result = 'FAIL'");
-      break;
-    case 'ring_fail':
-      conditions.push("Ring_Result = 'FAIL'");
-      break;
-  }
-
-  return conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+function classifiedSelect(): string {
+  return `(
+    SELECT
+      l.Date_Time, l.Plant_Id, l.DMC, l.Circlip_Result, l.Circlip_Time,
+      l.Ring_Result, l.Ring_Time, l.Ring_Count, l.Unloading_Time, l.Result,
+      ${STATE_CASE_SQL} AS state,
+      p.max_ring_count AS total_attempts,
+      CASE WHEN p.max_ring_count > 1 THEN 1 ELSE 0 END AS reinspected
+    FROM latest l
+    INNER JOIN per_dmc p ON p.DMC = l.DMC
+  ) AS x`;
 }
 
 export default async function listRoutes(app: FastifyInstance) {
   app.get<{ Querystring: ListQuery }>('/list', async (req) => {
     const page = Math.max(1, parseInt(req.query.page || '1', 10));
     const size = Math.min(200, Math.max(1, parseInt(req.query.size || '50', 10)));
-    const sort = VALID_SORT_COLUMNS.includes(req.query.sort || '') ? req.query.sort! : 'Date_Time';
+    const sortKey = SORT_COLUMNS[req.query.sort || ''] || 'Date_Time';
     const order = req.query.order === 'asc' ? 'ASC' : 'DESC';
     const offset = (page - 1) * size;
+    const typeWhere = buildTypeWhere(req.query.type);
 
     const pool = await getPool();
 
-    // Count query
+    // Count
     const countRequest = pool.request();
-    const whereClause = buildWhereClause(req.query, countRequest);
-    const countResult = await countRequest.query(`SELECT COUNT(*) as total FROM dbo.SAM_Log ${whereClause}`);
+    const countCte = buildBaseCte(req.query, countRequest);
+    const countResult = await countRequest.query(`
+      ${countCte}
+      SELECT COUNT(*) AS total
+      FROM ${classifiedSelect()}
+      WHERE ${typeWhere}
+    `);
     const total = countResult.recordset[0].total;
 
-    // Data query
+    // Data
     const dataRequest = pool.request();
-    const dataWhere = buildWhereClause(req.query, dataRequest);
+    const dataCte = buildBaseCte(req.query, dataRequest);
     dataRequest.input('offset', offset);
     dataRequest.input('size', size);
 
     const dataResult = await dataRequest.query(`
-      SELECT * FROM dbo.SAM_Log
-      ${dataWhere}
-      ORDER BY ${sort} ${order}
+      ${dataCte}
+      SELECT *
+      FROM ${classifiedSelect()}
+      WHERE ${typeWhere}
+      ORDER BY ${sortKey} ${order}
       OFFSET @offset ROWS FETCH NEXT @size ROWS ONLY
     `);
 
-    const response: PaginatedResponse<SamLogRecord> = {
-      data: dataResult.recordset,
+    serializeDateTimeFields(dataResult.recordset);
+    const data: PartListItem[] = dataResult.recordset.map((r: Record<string, unknown>) => ({
+      Date_Time: r.Date_Time as string | null,
+      Plant_Id: r.Plant_Id as string | null,
+      DMC: r.DMC as string | null,
+      Circlip_Result: r.Circlip_Result as string | null,
+      Circlip_Time: r.Circlip_Time as string | null,
+      Ring_Result: r.Ring_Result as string | null,
+      Ring_Time: r.Ring_Time as string | null,
+      Ring_Count: r.Ring_Count as number | null,
+      Unloading_Time: r.Unloading_Time as string | null,
+      Result: r.Result as string | null,
+      state: r.state as PartListItem['state'],
+      total_attempts: (r.total_attempts as number) ?? 0,
+      reinspected: ((r.reinspected as number) ?? 0) === 1,
+    }));
+
+    const response: PaginatedResponse<PartListItem> = {
+      data,
       total,
       page,
       size,
       total_pages: Math.ceil(total / size),
     };
-
     return response;
   });
 
-  // CSV export
+  // CSV export — same filter set + same dedupe + same classification.
   app.get<{ Querystring: ListQuery }>('/export', async (req, reply) => {
-    const pool = await getPool();
-    const dataRequest = pool.request();
-    const whereClause = buildWhereClause(req.query, dataRequest);
-    const sort = VALID_SORT_COLUMNS.includes(req.query.sort || '') ? req.query.sort! : 'Date_Time';
+    const sortKey = SORT_COLUMNS[req.query.sort || ''] || 'Date_Time';
     const order = req.query.order === 'asc' ? 'ASC' : 'DESC';
+    const typeWhere = buildTypeWhere(req.query.type);
 
-    const result = await dataRequest.query(`
-      SELECT * FROM dbo.SAM_Log ${whereClause} ORDER BY ${sort} ${order}
+    const pool = await getPool();
+    const request = pool.request();
+    const cte = buildBaseCte(req.query, request);
+
+    const result = await request.query(`
+      ${cte}
+      SELECT *
+      FROM ${classifiedSelect()}
+      WHERE ${typeWhere}
+      ORDER BY ${sortKey} ${order}
     `);
 
-    const records = result.recordset;
+    serializeDateTimeFields(result.recordset);
+    const records = result.recordset.map((r: Record<string, unknown>) => ({
+      ...r,
+      reinspected: ((r.reinspected as number) ?? 0) === 1,
+    }));
+
     if (records.length === 0) {
       reply.status(404);
       return { error: 'No records found for export' };
@@ -119,7 +176,7 @@ export default async function listRoutes(app: FastifyInstance) {
     const csvRows = [headers.join(',')];
     for (const record of records) {
       const values = headers.map((h) => {
-        const val = record[h];
+        const val = (record as Record<string, unknown>)[h];
         if (val === null || val === undefined) return '';
         const str = String(val);
         return str.includes(',') || str.includes('"') || str.includes('\n')
@@ -130,8 +187,12 @@ export default async function listRoutes(app: FastifyInstance) {
     }
 
     const csv = csvRows.join('\n');
+    const bucket = req.query.type && req.query.type !== 'all' ? `_${req.query.type}` : '';
     reply.header('Content-Type', 'text/csv');
-    reply.header('Content-Disposition', `attachment; filename=sam_log_export_${new Date().toISOString().slice(0, 10)}.csv`);
+    reply.header(
+      'Content-Disposition',
+      `attachment; filename=sam_log${bucket}_${new Date().toISOString().slice(0, 10)}.csv`,
+    );
     return csv;
   });
 }
