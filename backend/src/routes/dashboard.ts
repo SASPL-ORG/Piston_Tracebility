@@ -1,7 +1,12 @@
 import { FastifyInstance } from 'fastify';
 import { getPool } from '../db/connection.js';
 import { bindFilterInputs, buildLatestPerDmcCte, STATE_CASE_SQL } from '../db/state.js';
-import type { DashboardResponse } from '../types/index.js';
+import type {
+  DashboardResponse,
+  ProductionGranularity,
+  StateBreakdownItem,
+  PartState,
+} from '../types/index.js';
 
 interface DashboardQuery {
   from?: string;
@@ -9,16 +14,53 @@ interface DashboardQuery {
   plant?: string;
 }
 
+// Adaptive bucketing: hour for short ranges, day for medium, week for long.
+// Boundaries chosen so a typical 'This Month' selection still gets daily bars.
+function pickGranularity(fromStr?: string, toStr?: string): ProductionGranularity {
+  if (!fromStr || !toStr) return 'hour';
+  const from = Date.parse(fromStr);
+  const to = Date.parse(toStr);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return 'hour';
+  const days = Math.floor((to - from) / 86_400_000) + 1;
+  if (days <= 1) return 'hour';
+  if (days <= 31) return 'day';
+  return 'week';
+}
+
+// Returns a SELECT expression and matching GROUP BY expression for the bucket.
+function bucketSql(granularity: ProductionGranularity): { selectExpr: string; groupExpr: string } {
+  switch (granularity) {
+    case 'hour':
+      return {
+        selectExpr: "FORMAT(l.Date_Time, 'yyyy-MM-dd HH:00')",
+        groupExpr: "FORMAT(l.Date_Time, 'yyyy-MM-dd HH:00')",
+      };
+    case 'day':
+      return {
+        selectExpr: "FORMAT(l.Date_Time, 'yyyy-MM-dd')",
+        groupExpr: "FORMAT(l.Date_Time, 'yyyy-MM-dd')",
+      };
+    case 'week':
+      // ISO-style: bucket by Monday of the week.
+      return {
+        selectExpr:
+          "FORMAT(DATEADD(week, DATEDIFF(week, 0, l.Date_Time), 0), 'yyyy-MM-dd')",
+        groupExpr: 'DATEADD(week, DATEDIFF(week, 0, l.Date_Time), 0)',
+      };
+  }
+}
+
 export default async function dashboardRoutes(app: FastifyInstance) {
   app.get<{ Querystring: DashboardQuery }>('/dashboard', async (req) => {
     const filters = req.query;
+    const granularity = pickGranularity(filters.from, filters.to);
+    const { selectExpr, groupExpr } = bucketSql(granularity);
     const pool = await getPool();
 
-    // KPIs: classify each DMC's latest-row state, then aggregate.
+    // KPIs.
     const kpiRequest = pool.request();
     const kpiConds = bindFilterInputs(kpiRequest, filters);
     const kpiCte = buildLatestPerDmcCte(kpiConds);
-
     const kpiResult = await kpiRequest.query(`
       ${kpiCte}
       SELECT
@@ -31,44 +73,60 @@ export default async function dashboardRoutes(app: FastifyInstance) {
       FROM latest l
       INNER JOIN per_dmc p ON p.DMC = l.DMC
     `);
-
     const kpiRow = kpiResult.recordset[0] || {};
     const total = kpiRow.total || 0;
     const passed = kpiRow.passed || 0;
 
-    // Hourly breakdown: bucket by latest row's Date_Time, classify the same way.
-    const hourlyRequest = pool.request();
-    const hourlyConds = bindFilterInputs(hourlyRequest, filters);
-    const hourlyCte = buildLatestPerDmcCte(hourlyConds);
-
-    const hourlyResult = await hourlyRequest.query(`
-      ${hourlyCte}
+    // Production breakdown — three buckets per time slice. In_Progress is
+    // its own column so the chart doesn't paint pending parts as failures.
+    const prodRequest = pool.request();
+    const prodConds = bindFilterInputs(prodRequest, filters);
+    const prodCte = buildLatestPerDmcCte(prodConds);
+    const prodResult = await prodRequest.query(`
+      ${prodCte}
       SELECT
-        FORMAT(l.Date_Time, 'yyyy-MM-dd HH:00') AS hour,
+        ${selectExpr} AS bucket,
         SUM(CASE WHEN ${STATE_CASE_SQL} IN ('PACKED','RING_OK') THEN 1 ELSE 0 END) AS passed,
-        SUM(CASE WHEN ${STATE_CASE_SQL} NOT IN ('PACKED','RING_OK') THEN 1 ELSE 0 END) AS failed
+        SUM(CASE WHEN ${STATE_CASE_SQL} = 'IN_PROGRESS' THEN 1 ELSE 0 END) AS in_progress,
+        SUM(CASE WHEN ${STATE_CASE_SQL} IN ('CIRCLIP_SCRAP','RING_NG') THEN 1 ELSE 0 END) AS failed
       FROM latest l
       INNER JOIN per_dmc p ON p.DMC = l.DMC
-      GROUP BY FORMAT(l.Date_Time, 'yyyy-MM-dd HH:00')
-      ORDER BY hour
+      GROUP BY ${groupExpr}
+      ORDER BY ${groupExpr}
     `);
 
-    // Plant breakdown: same classification, grouped by latest row's Plant_Id.
-    const plantRequest = pool.request();
-    const plantConds = bindFilterInputs(plantRequest, filters);
-    const plantCte = buildLatestPerDmcCte(plantConds);
-
-    const plantResult = await plantRequest.query(`
-      ${plantCte}
-      SELECT
-        l.Plant_Id AS plant_id,
-        COUNT(DISTINCT l.DMC) AS total,
-        SUM(CASE WHEN ${STATE_CASE_SQL} IN ('PACKED','RING_OK') THEN 1 ELSE 0 END) AS passed
-      FROM latest l
-      INNER JOIN per_dmc p ON p.DMC = l.DMC
-      GROUP BY l.Plant_Id
-      ORDER BY l.Plant_Id
+    // State distribution — same source-of-truth classifier, COUNT DISTINCT
+    // per state. Replaces the old plant donut, which was degenerate when
+    // each install talks to one machine's DB.
+    const stateRequest = pool.request();
+    const stateConds = bindFilterInputs(stateRequest, filters);
+    const stateCte = buildLatestPerDmcCte(stateConds);
+    const stateResult = await stateRequest.query(`
+      ${stateCte}
+      , classified AS (
+        SELECT l.DMC, ${STATE_CASE_SQL} AS state
+        FROM latest l
+        INNER JOIN per_dmc p ON p.DMC = l.DMC
+      )
+      SELECT state, COUNT(DISTINCT DMC) AS count
+      FROM classified
+      GROUP BY state
     `);
+
+    const STATE_ORDER: PartState[] = [
+      'PACKED',
+      'RING_OK',
+      'IN_PROGRESS',
+      'RING_NG',
+      'CIRCLIP_SCRAP',
+    ];
+    const byState = new Map<PartState, number>(
+      stateResult.recordset.map((r: { state: PartState; count: number }) => [r.state, r.count]),
+    );
+    const stateBreakdown: StateBreakdownItem[] = STATE_ORDER.map((s) => ({
+      state: s,
+      count: byState.get(s) ?? 0,
+    })).filter((s) => s.count > 0);
 
     const response: DashboardResponse = {
       kpis: {
@@ -80,14 +138,14 @@ export default async function dashboardRoutes(app: FastifyInstance) {
         reinspected: kpiRow.reinspected || 0,
         pass_rate: total > 0 ? Math.round((passed / total) * 1000) / 10 : 0,
       },
-      hourly_breakdown: hourlyResult.recordset,
-      plant_breakdown: plantResult.recordset,
+      granularity,
+      production_breakdown: prodResult.recordset,
+      state_breakdown: stateBreakdown,
     };
-
     return response;
   });
 
-  // Distinct plant IDs for the filter dropdown.
+  // Distinct plant IDs (still used by Lists; Dashboard no longer fetches it).
   app.get('/plants', async () => {
     const pool = await getPool();
     const result = await pool.request().query(`

@@ -4,16 +4,39 @@ import { Package, CheckCircle, XCircle, AlertTriangle, Percent, RefreshCw, Clock
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import KpiCard from '../components/KpiCard';
 import DateRangePicker from '../components/DateRangePicker';
-import { fetchDashboard, fetchPlants, DashboardResponse } from '../lib/api';
+import {
+  fetchDashboard,
+  DashboardResponse,
+  PartState,
+  PART_STATE_LABEL,
+  ProductionGranularity,
+} from '../lib/api';
 
-const PIE_COLORS = ['#10b981', '#ef4444', '#f59e0b', '#6366f1', '#8b5cf6'];
+const STATE_COLORS: Record<PartState, string> = {
+  PACKED: '#10b981', // green
+  RING_OK: '#14b8a6', // teal
+  IN_PROGRESS: '#f59e0b', // amber
+  RING_NG: '#ef4444', // red
+  CIRCLIP_SCRAP: '#b91c1c', // deeper red
+};
+
+function formatBucketTick(value: string, granularity: ProductionGranularity): string {
+  // Backend emits 'yyyy-MM-dd HH:00' for hour or 'yyyy-MM-dd' for day/week.
+  if (granularity === 'hour') return value.slice(11, 16); // HH:00
+  // day or week: dd-MM
+  return `${value.slice(8, 10)}-${value.slice(5, 7)}`;
+}
+
+function granularityLabel(g: ProductionGranularity): string {
+  if (g === 'hour') return 'hourly';
+  if (g === 'day') return 'daily';
+  return 'weekly';
+}
 
 export default function Dashboard() {
   const today = format(new Date(), 'yyyy-MM-dd');
   const [from, setFrom] = useState(today);
   const [to, setTo] = useState(today);
-  const [plant, setPlant] = useState('');
-  const [plants, setPlants] = useState<string[]>([]);
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -22,34 +45,30 @@ export default function Dashboard() {
     setLoading(true);
     setError('');
     try {
-      const result = await fetchDashboard(from, to, plant || undefined);
+      const result = await fetchDashboard(from, to);
       setData(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load dashboard');
     } finally {
       setLoading(false);
     }
-  }, [from, to, plant]);
-
-  useEffect(() => {
-    fetchPlants().then(setPlants).catch(() => {});
-  }, []);
+  }, [from, to]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
-  const handleDateChange = (newFrom: string, newTo: string, newPlant: string) => {
+  const handleDateChange = (newFrom: string, newTo: string) => {
     setFrom(newFrom);
     setTo(newTo);
-    setPlant(newPlant);
   };
 
-  const pieData = data?.plant_breakdown.map((p) => ({
-    name: p.plant_id,
-    value: p.total,
-    passed: p.passed,
-  })) || [];
+  const stateData = (data?.state_breakdown ?? []).map((s) => ({
+    name: PART_STATE_LABEL[s.state],
+    value: s.count,
+    state: s.state,
+    color: STATE_COLORS[s.state],
+  }));
 
   return (
     <div className="space-y-6">
@@ -69,9 +88,15 @@ export default function Dashboard() {
         </button>
       </div>
 
-      {/* Filters */}
+      {/* Filters — single-machine install, no plant filter */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
-        <DateRangePicker from={from} to={to} plant={plant} plants={plants} onChange={handleDateChange} />
+        <DateRangePicker
+          from={from}
+          to={to}
+          plant=""
+          plants={[]}
+          onChange={(f, t) => handleDateChange(f, t)}
+        />
       </div>
 
       {error && (
@@ -80,7 +105,7 @@ export default function Dashboard() {
 
       {/* KPI Cards */}
       {data && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-7 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-7 gap-4 auto-rows-fr">
           <KpiCard title="Total Parts" value={data.kpis.total.toLocaleString()} icon={Package} color="blue" subtitle="Distinct parts" />
           <KpiCard title="Passed" value={data.kpis.passed.toLocaleString()} icon={CheckCircle} color="green" subtitle="Packed + Ring OK" />
           <KpiCard title="Circlip Fail" value={data.kpis.circlip_fail.toLocaleString()} icon={XCircle} color="red" subtitle="Scrapped" />
@@ -94,26 +119,31 @@ export default function Dashboard() {
       {/* Charts */}
       {data && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Hourly production chart */}
+          {/* Production breakdown — adaptive bucketing, three colors */}
           <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 shadow-sm p-5">
-            <h3 className="text-base font-semibold text-gray-800 mb-4">Production Breakdown</h3>
-            {data.hourly_breakdown.length > 0 ? (
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-semibold text-gray-800">Production Breakdown</h3>
+              <span className="text-xs text-gray-400">{granularityLabel(data.granularity)}</span>
+            </div>
+            {data.production_breakdown.length > 0 ? (
               <ResponsiveContainer width="100%" height={320}>
-                <BarChart data={data.hourly_breakdown}>
+                <BarChart data={data.production_breakdown}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis
-                    dataKey="hour"
-                    tickFormatter={(v: string) => v.slice(11, 16)}
+                    dataKey="bucket"
+                    tickFormatter={(v: string) => formatBucketTick(v, data.granularity)}
                     fontSize={12}
                     tick={{ fill: '#6b7280' }}
+                    minTickGap={8}
                   />
-                  <YAxis fontSize={12} tick={{ fill: '#6b7280' }} />
+                  <YAxis fontSize={12} tick={{ fill: '#6b7280' }} allowDecimals={false} />
                   <Tooltip
                     labelFormatter={(v: string) => v}
                     contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb' }}
                   />
                   <Legend />
-                  <Bar dataKey="passed" stackId="a" fill="#10b981" name="Passed" radius={[0, 0, 0, 0]} />
+                  <Bar dataKey="passed" stackId="a" fill="#10b981" name="Passed" />
+                  <Bar dataKey="in_progress" stackId="a" fill="#f59e0b" name="In Progress" />
                   <Bar dataKey="failed" stackId="a" fill="#ef4444" name="Failed" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
@@ -122,38 +152,40 @@ export default function Dashboard() {
             )}
           </div>
 
-          {/* Plant breakdown */}
+          {/* State distribution — replaces single-plant donut */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
-            <h3 className="text-base font-semibold text-gray-800 mb-4">Plant Breakdown</h3>
-            {pieData.length > 0 ? (
+            <h3 className="text-base font-semibold text-gray-800 mb-4">State Distribution</h3>
+            {stateData.length > 0 ? (
               <>
                 <ResponsiveContainer width="100%" height={240}>
                   <PieChart>
                     <Pie
-                      data={pieData}
+                      data={stateData}
                       cx="50%"
                       cy="50%"
-                      innerRadius={50}
-                      outerRadius={90}
-                      paddingAngle={3}
+                      innerRadius={55}
+                      outerRadius={95}
+                      paddingAngle={2}
                       dataKey="value"
-                      label={({ name, value }) => `${name}: ${value}`}
                     >
-                      {pieData.map((_, index) => (
-                        <Cell key={index} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                      {stateData.map((d) => (
+                        <Cell key={d.state} fill={d.color} />
                       ))}
                     </Pie>
-                    <Tooltip />
+                    <Tooltip
+                      formatter={(value: number, name: string) => [value, name]}
+                      contentStyle={{ borderRadius: '8px', border: '1px solid #e5e7eb' }}
+                    />
                   </PieChart>
                 </ResponsiveContainer>
-                <div className="mt-3 space-y-2">
-                  {data.plant_breakdown.map((p, i) => (
-                    <div key={p.plant_id} className="flex items-center justify-between text-sm">
+                <div className="mt-3 space-y-1.5">
+                  {stateData.map((d) => (
+                    <div key={d.state} className="flex items-center justify-between text-sm">
                       <div className="flex items-center gap-2">
-                        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
-                        <span className="text-gray-600">{p.plant_id}</span>
+                        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: d.color }} />
+                        <span className="text-gray-600">{d.name}</span>
                       </div>
-                      <span className="font-medium text-gray-800">{p.total} ({p.passed} passed)</span>
+                      <span className="font-medium text-gray-800">{d.value}</span>
                     </div>
                   ))}
                 </div>

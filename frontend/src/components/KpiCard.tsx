@@ -23,17 +23,19 @@ export default function KpiCard({ title, value, subtitle, icon: Icon, color }: K
   const colors = colorMap[color];
 
   return (
-    <div className={clsx('bg-white rounded-xl border shadow-sm p-5', colors.border)}>
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-sm font-medium text-gray-500 uppercase tracking-wide">{title}</p>
-          <p className="mt-2 text-3xl font-bold text-gray-900">{value}</p>
-          {subtitle && <p className="mt-1 text-xs text-gray-400">{subtitle}</p>}
-        </div>
-        <div className={clsx('p-3 rounded-lg', colors.bg)}>
+    <div className={clsx('bg-white rounded-xl border shadow-sm p-5 h-full flex flex-col', colors.border)}>
+      <div className="flex items-start justify-between gap-3">
+        {/* Reserve two lines worth of vertical space for the title so cards
+            with one-word titles align with cards whose titles wrap. */}
+        <p className="text-sm font-medium text-gray-500 uppercase tracking-wide leading-tight min-h-[2.5rem]">
+          {title}
+        </p>
+        <div className={clsx('p-3 rounded-lg shrink-0', colors.bg)}>
           <Icon size={22} className={colors.icon} />
         </div>
       </div>
+      <p className="mt-2 text-3xl font-bold text-gray-900">{value}</p>
+      {subtitle && <p className="mt-1 text-xs text-gray-400 min-h-[1rem]">{subtitle}</p>}
     </div>
   );
 }

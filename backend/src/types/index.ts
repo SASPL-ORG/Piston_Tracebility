@@ -32,22 +32,25 @@ export interface DashboardKpis {
   pass_rate: number;
 }
 
-export interface HourlyBreakdown {
-  hour: string;
+export type ProductionGranularity = 'hour' | 'day' | 'week';
+
+export interface ProductionBucket {
+  bucket: string; // 'yyyy-MM-dd HH:00' for hour, 'yyyy-MM-dd' for day or week-start
   passed: number;
+  in_progress: number;
   failed: number;
 }
 
-export interface PlantBreakdown {
-  plant_id: string;
-  total: number;
-  passed: number;
+export interface StateBreakdownItem {
+  state: PartState;
+  count: number;
 }
 
 export interface DashboardResponse {
   kpis: DashboardKpis;
-  hourly_breakdown: HourlyBreakdown[];
-  plant_breakdown: PlantBreakdown[];
+  granularity: ProductionGranularity;
+  production_breakdown: ProductionBucket[];
+  state_breakdown: StateBreakdownItem[];
 }
 
 export interface PaginatedResponse<T> {
