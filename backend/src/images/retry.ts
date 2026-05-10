@@ -6,7 +6,6 @@ import {
   PendingImageRow,
   nextPictureNo,
   updateResolvedRow,
-  clearPendingNoMatch,
   deleteImageRow,
 } from './db.js';
 import { logAlarm } from './alarms.js';
@@ -70,7 +69,12 @@ async function processPendingRow(row: PendingImageRow): Promise<RowOutcome> {
       filePath: row.file_path,
       capturedAt: row.captured_at.toISOString?.() ?? String(row.captured_at),
     });
-    await clearPendingNoMatch(row.id);
+    // Delete the row outright. We can't just clear pending_match — that
+    // would put the row into UQ_Image_Resolved's filter scope with NULL
+    // ring_count + picture_no, and multiple NO_MATCH rows for the same
+    // DMC + type would collide. The file stays in source for manual
+    // review; the alarm captures the diagnostic.
+    await deleteImageRow(row.id);
     return 'expired';
   }
 

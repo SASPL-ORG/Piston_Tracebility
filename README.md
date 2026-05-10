@@ -185,6 +185,7 @@ in `dbo.Image_Index` and returned by the API is unchanged. So a DMC of
 | `IMAGE_FILE_HANDLING` | `move` | `move` or `copy` |
 | `IMAGE_RETENTION_DAYS` | `365` | Daily FIFO purge |
 | `IMAGE_WATCH_USE_POLLING` | `true` | inotify is unreliable across Windows bind-mounts |
+| `TZ` | `Asia/Kolkata` | Container timezone. **Must match the SCADA box's local TZ** — PLC writes `Circlip_Time` / `Ring_Time` as wall-clock strings with no timezone info, and the matcher compares file mtimes against them using local-time components. |
 
 ## Troubleshooting
 

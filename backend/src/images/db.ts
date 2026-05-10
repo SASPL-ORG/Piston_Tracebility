@@ -132,14 +132,6 @@ export async function updateResolvedRow(
     `);
 }
 
-export async function clearPendingNoMatch(id: number): Promise<void> {
-  const pool = await getPool();
-  await pool
-    .request()
-    .input('id', id)
-    .query(`UPDATE dbo.Image_Index SET pending_match = 0 WHERE id = @id`);
-}
-
 export async function findPendingImages(): Promise<PendingImageRow[]> {
   const pool = await getPool();
   const result = await pool.request().query(`

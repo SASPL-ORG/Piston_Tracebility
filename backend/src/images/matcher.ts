@@ -9,6 +9,20 @@ interface MatchInput {
   capturedAt: Date;
 }
 
+// SAM_Log's Circlip_Time and Ring_Time are PLC-emitted wall-clock strings
+// in the SCADA box's local timezone (no TZ info attached). The image's
+// capturedAt is a true UTC instant from fs.stat. To compare like-for-like
+// we format capturedAt using local-time components and parse both with
+// TRY_CONVERT(DATETIME2, ..., 120) on the SQL side. Requires the container
+// to run with TZ set to the SCADA box's timezone (e.g. Asia/Kolkata).
+function toDbWallClock(d: Date): string {
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  );
+}
+
 // Resolves the parsed image to a SAM_Log inspection event.
 //   number   → matched a ring inspection at that Ring_Count
 //   null     → matched a circlip inspection (circlip uses ring_count = NULL)
@@ -18,11 +32,13 @@ export async function matchToSamLog(input: MatchInput): Promise<MatchResult> {
   const cfg = getImageConfig();
   const pool = await getPool();
 
+  const capturedWall = toDbWallClock(input.capturedAt);
+
   if (input.inspectionType === 'CIRCLIP') {
     const result = await pool
       .request()
       .input('dmc', input.fullDmc)
-      .input('capturedAt', input.capturedAt)
+      .input('capturedAt', capturedWall)
       .input('tol', cfg.matchToleranceSeconds)
       .query(`
         SELECT TOP 1 1 AS found
@@ -32,7 +48,7 @@ export async function matchToSamLog(input: MatchInput): Promise<MatchResult> {
           AND Circlip_Result IS NOT NULL
           AND ABS(DATEDIFF(SECOND,
                 TRY_CONVERT(DATETIME2, Circlip_Time, 120),
-                @capturedAt
+                TRY_CONVERT(DATETIME2, @capturedAt, 120)
               )) <= @tol
       `);
 
@@ -44,7 +60,7 @@ export async function matchToSamLog(input: MatchInput): Promise<MatchResult> {
   const result = await pool
     .request()
     .input('dmc', input.fullDmc)
-    .input('capturedAt', input.capturedAt)
+    .input('capturedAt', capturedWall)
     .input('tol', cfg.matchToleranceSeconds)
     .query(`
       SELECT TOP 1 Ring_Count
@@ -54,11 +70,11 @@ export async function matchToSamLog(input: MatchInput): Promise<MatchResult> {
         AND Ring_Result IS NOT NULL
         AND ABS(DATEDIFF(SECOND,
               TRY_CONVERT(DATETIME2, Ring_Time, 120),
-              @capturedAt
+              TRY_CONVERT(DATETIME2, @capturedAt, 120)
             )) <= @tol
       ORDER BY ABS(DATEDIFF(SECOND,
                 TRY_CONVERT(DATETIME2, Ring_Time, 120),
-                @capturedAt
+                TRY_CONVERT(DATETIME2, @capturedAt, 120)
               )) ASC
     `);
 

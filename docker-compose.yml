@@ -14,6 +14,11 @@ services:
       - DB_TRUST_SERVER_CERTIFICATE=${DB_TRUST_SERVER_CERTIFICATE:-true}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - NODE_ENV=production
+      # Container timezone — matters for the image-matcher: PLC writes
+      # SAM_Log Circlip_Time / Ring_Time as wall-clock strings in the SCADA
+      # box's local TZ, and the matcher formats file mtimes with the same
+      # local-time methods. Must match the SCADA box's local timezone.
+      - TZ=${TZ:-UTC}
     volumes:
       - ./data/exports:/data/exports
       - ./data/logs:/data/logs
