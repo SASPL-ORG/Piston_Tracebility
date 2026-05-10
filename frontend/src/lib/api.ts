@@ -125,6 +125,10 @@ export function fetchPart(dmc: string): Promise<PartResponse> {
   return fetchJson(`/part/${encodeURIComponent(dmc)}`);
 }
 
+export function partTracePdfUrl(dmc: string): string {
+  return `${BASE_URL}/part/${encodeURIComponent(dmc)}/report.pdf`;
+}
+
 // Maintenance types
 export interface MaintenanceComponent {
   id?: number;

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Search, CheckCircle, XCircle, Hash, Activity, RotateCw, Cpu, Image as ImageIcon } from 'lucide-react';
+import { Search, CheckCircle, XCircle, Hash, Activity, RotateCw, Cpu, Image as ImageIcon, FileDown } from 'lucide-react';
 import clsx from 'clsx';
 import ResultBadge from '../components/ResultBadge';
 import StateBadge from '../components/StateBadge';
@@ -8,6 +8,7 @@ import {
   fetchPart,
   formatDateTime,
   formatTimestamp,
+  partTracePdfUrl,
   PART_STATE_LABEL,
   PartResponse,
   SamLogRecord,
@@ -128,6 +129,16 @@ export default function PartTrace() {
             <div className="flex items-center gap-3 mb-5">
               <div className="w-1 h-6 bg-blue-600 rounded-full" />
               <h2 className="text-lg font-semibold text-gray-800">Current State</h2>
+              <a
+                href={partTracePdfUrl(searchedDmc)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="ml-auto inline-flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors"
+                title="Download Part Trace report as PDF"
+              >
+                <FileDown size={14} />
+                Download PDF
+              </a>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-y-4 gap-x-8">
               <div className="flex items-center gap-3">
