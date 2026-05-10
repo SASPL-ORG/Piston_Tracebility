@@ -12,6 +12,16 @@ const STATE_LABEL: Record<PartState, string> = {
   IN_PROGRESS: 'In Progress',
 };
 
+const COLOR = {
+  brand: '#2563eb', // blue accent (matches the UI's left-bar)
+  pass: '#059669',
+  fail: '#dc2626',
+  pending: '#d97706',
+  muted: '#6b7280',
+  faint: '#9ca3af',
+  divider: '#e5e7eb',
+};
+
 function fmt(value: string | null | undefined): string {
   if (value === null || value === undefined || value === '') return '-';
   return value;
@@ -25,139 +35,187 @@ function fmtDateTime(iso: string | null | undefined): string {
   return `${d}-${mo}-${y} ${h}:${mi}:${s}`;
 }
 
+function resultColor(result: string | null | undefined): string {
+  if (result === 'PASS') return COLOR.pass;
+  if (result === 'FAIL') return COLOR.fail;
+  return COLOR.muted;
+}
+
+function stateColor(s: PartState): string {
+  if (s === 'PACKED' || s === 'RING_OK') return COLOR.pass;
+  if (s === 'IN_PROGRESS') return COLOR.pending;
+  return COLOR.fail;
+}
+
+// Draws the section title with the same blue left-bar accent the UI uses.
+function sectionHeader(doc: PDFKit.PDFDocument, title: string): void {
+  const x0 = doc.page.margins.left;
+  doc.moveDown(0.4);
+  const y = doc.y;
+  doc.rect(x0, y, 3, 14).fill(COLOR.brand);
+  doc.fillColor('black').font('Helvetica-Bold').fontSize(13).text(title, x0 + 10, y);
+  doc.fontSize(10).font('Helvetica');
+  doc.x = x0;
+  doc.moveDown(0.4);
+}
+
+// Two-column key/value list. The fix vs the previous version: doc.x is reset
+// to the page's left margin at the START of each row's label call, so labels
+// don't drift right as rows are added.
+type KvRow = [label: string, value: string, valueColor?: string];
+
+function drawKeyValueTable(doc: PDFKit.PDFDocument, rows: KvRow[]): void {
+  const x0 = doc.page.margins.left;
+  const labelW = 130;
+  const valueX = x0 + labelW;
+  const valueW = doc.page.width - doc.page.margins.right - valueX;
+  doc.fontSize(10);
+  for (const [k, v, color] of rows) {
+    const y = doc.y;
+    doc.font('Helvetica-Bold').fillColor('black').text(k, x0, y, { width: labelW });
+    const yAfterLabel = doc.y;
+    // Reset cursor to the row baseline before drawing the value column.
+    doc.font('Helvetica').fillColor(color || 'black').text(v, valueX, y, { width: valueW });
+    const yAfterValue = doc.y;
+    // Advance to whichever column went lower so the next row doesn't overlap.
+    doc.y = Math.max(yAfterLabel, yAfterValue);
+    doc.x = x0;
+    doc.fillColor('black');
+  }
+}
+
+// One inspection-attempt row, modeled after the on-screen card: colored left
+// bar (green/red), kind label, attempt number, bold result, timestamp.
+function drawInspectionRow(
+  doc: PDFKit.PDFDocument,
+  args: {
+    kind: 'CIRCLIP' | 'RING';
+    attempt: number;
+    result: string | null;
+    time: string;
+  },
+): void {
+  const x0 = doc.page.margins.left;
+  const y = doc.y;
+  const color = resultColor(args.result);
+
+  // Colored left bar — tall enough to span the whole row.
+  doc.rect(x0, y + 1, 3, 14).fill(color);
+
+  doc.x = x0 + 10;
+  doc.fontSize(10).font('Helvetica-Bold').fillColor('black').text(args.kind, { continued: true });
+  doc.font('Helvetica').fillColor(COLOR.muted).text(`   Attempt ${args.attempt}   `, { continued: true });
+  doc.font('Helvetica-Bold').fillColor(color).text(fmt(args.result), { continued: true });
+  doc.font('Helvetica').fillColor(COLOR.muted).text(`     Time: ${args.time}`);
+  doc.fillColor('black');
+  doc.x = x0;
+  doc.moveDown(0.25);
+}
+
+// One Event Timeline block — date in colored bold, then two indented detail
+// lines. Mirrors the on-screen timeline card.
+function drawTimelineRow(doc: PDFKit.PDFDocument, r: SamLogRecord): void {
+  const x0 = doc.page.margins.left;
+  const isPass = r.Result === 'PASS';
+  const color = isPass ? COLOR.pass : COLOR.fail;
+
+  doc.fontSize(10).font('Helvetica-Bold').fillColor(color).text(fmtDateTime(r.Date_Time), x0);
+  doc.fontSize(9).font('Helvetica').fillColor(COLOR.muted).text(
+    `Plant: ${fmt(r.Plant_Id)}     Result: ${fmt(r.Result)}     Ring Count: ${r.Ring_Count ?? '-'}`,
+    x0 + 12,
+  );
+  doc.fillColor('black').text(
+    `Circlip: ${fmt(r.Circlip_Result)} (${fmt(r.Circlip_Time)})     ` +
+      `Ring: ${fmt(r.Ring_Result)} (${fmt(r.Ring_Time)})     ` +
+      `Unload: ${fmt(r.Unloading_Time)}`,
+    x0 + 12,
+  );
+  doc.fontSize(10);
+  doc.x = x0;
+  doc.moveDown(0.3);
+}
+
 export interface PartTracePdfInput {
   dmc: string;
   records: SamLogRecord[];
 }
 
-// Returns a Readable stream of the rendered PDF. Caller pipes to the
-// Fastify reply.
 export function renderPartTracePdf(input: PartTracePdfInput): Readable {
   const { dmc, records } = input;
   const doc = new PDFDocument({ size: 'A4', margin: 50 });
+  const x0 = doc.page.margins.left;
 
   const latest = records[records.length - 1];
   const hasCirclipFail = records.some((r) => r.Circlip_Result === 'FAIL');
   const totalAttempts = records.reduce((max, r) => Math.max(max, r.Ring_Count ?? 0), 0);
   const state = classifyState(latest, hasCirclipFail);
-  const plant = latest?.Plant_Id ?? '-';
-  const firstSeen = records[0]?.Date_Time ?? null;
-  const lastSeen = latest?.Date_Time ?? null;
 
-  // ---- Header ----------------------------------------------------------
-  doc.fontSize(16).font('Helvetica-Bold').text('Part Traceability Report', { align: 'left' });
-  doc.moveDown(0.3);
-  doc.fontSize(9).font('Helvetica').fillColor('#555');
-  doc.text(`Generated: ${new Date().toISOString().replace('T', ' ').slice(0, 19)} UTC`);
-  doc.fillColor('black').moveDown(0.8);
+  // ---- Title block ----------------------------------------------------
+  doc.fillColor('black').fontSize(20).font('Helvetica-Bold').text('Part Traceability Report', x0);
+  doc.moveDown(0.15);
+  doc.fontSize(8).font('Helvetica').fillColor(COLOR.faint)
+    .text(`Generated: ${new Date().toISOString().replace('T', ' ').slice(0, 19)} UTC`, x0);
+  doc.moveDown(0.4);
 
-  // DMC line — break long DMCs across lines so the header doesn't run off.
-  doc.fontSize(10).font('Helvetica-Bold').text('DMC:', { continued: true });
+  // DMC line — bold label, mono value, allow it to wrap on long DMCs.
+  doc.fontSize(10).fillColor('black').font('Helvetica-Bold').text('DMC:', x0, doc.y, { continued: true });
   doc.font('Courier').text(`  ${dmc}`);
-  doc.moveDown(0.3);
+  doc.x = x0;
 
-  // ---- Current State ---------------------------------------------------
-  doc.moveDown(0.5).fontSize(12).font('Helvetica-Bold').text('Current State');
-  doc.moveDown(0.3);
-  doc.fontSize(10).font('Helvetica');
-  const summaryRows: [string, string][] = [
-    ['State', STATE_LABEL[state]],
-    ['Plant', plant],
+  // ---- Current State --------------------------------------------------
+  sectionHeader(doc, 'Current State');
+  drawKeyValueTable(doc, [
+    ['State', STATE_LABEL[state], stateColor(state)],
+    ['Plant', fmt(latest?.Plant_Id)],
     ['Total Records', String(records.length)],
     ['Ring Attempts', String(totalAttempts)],
     ['Reinspected', totalAttempts > 1 ? 'Yes' : 'No'],
-    ['Latest Circlip', fmt(latest?.Circlip_Result)],
-    ['Latest Ring', fmt(latest?.Ring_Result)],
+    ['Latest Circlip', fmt(latest?.Circlip_Result), resultColor(latest?.Circlip_Result)],
+    ['Latest Ring', fmt(latest?.Ring_Result), resultColor(latest?.Ring_Result)],
     ['Latest Unload Time', fmt(latest?.Unloading_Time)],
-    ['First Seen', fmtDateTime(firstSeen)],
-    ['Last Seen', fmtDateTime(lastSeen)],
-  ];
-  drawTwoColumnTable(doc, summaryRows);
+    ['First Seen', fmtDateTime(records[0]?.Date_Time)],
+    ['Last Seen', fmtDateTime(latest?.Date_Time)],
+  ]);
 
-  // ---- Inspection Attempts --------------------------------------------
-  doc.moveDown(0.8).fontSize(12).font('Helvetica-Bold').text('Inspection Attempts');
-  doc.moveDown(0.3);
-  doc.fontSize(10).font('Helvetica');
-
-  let printedAny = false;
+  // ---- Inspection Attempts -------------------------------------------
+  sectionHeader(doc, 'Inspection Attempts');
+  let any = false;
   for (const r of records) {
     if (r.Circlip_Result !== null) {
-      drawAttemptLine(doc, {
+      drawInspectionRow(doc, {
         kind: 'CIRCLIP',
         attempt: 1,
         result: r.Circlip_Result,
-        plcTime: r.Circlip_Time,
-        dbTime: fmtDateTime(r.Date_Time),
+        time: fmtDateTime(r.Date_Time),
       });
-      printedAny = true;
+      any = true;
     }
     if (r.Ring_Result !== null) {
-      drawAttemptLine(doc, {
+      drawInspectionRow(doc, {
         kind: 'RING',
         attempt: r.Ring_Count ?? 1,
         result: r.Ring_Result,
-        plcTime: r.Ring_Time,
-        dbTime: fmtDateTime(r.Date_Time),
+        time: fmtDateTime(r.Date_Time),
       });
-      printedAny = true;
+      any = true;
     }
   }
-  if (!printedAny) {
-    doc.fillColor('#888').text('No inspection attempts recorded.').fillColor('black');
+  if (!any) {
+    doc.fontSize(10).fillColor(COLOR.muted).text('No inspection attempts recorded.', x0);
+    doc.fillColor('black');
   }
 
-  // ---- Event Timeline --------------------------------------------------
-  doc.moveDown(0.8).fontSize(12).font('Helvetica-Bold').text('Event Timeline');
-  doc.moveDown(0.3);
-  doc.fontSize(9).font('Helvetica');
+  // ---- Event Timeline ------------------------------------------------
+  sectionHeader(doc, 'Event Timeline');
   for (const r of records) {
-    const overall = fmt(r.Result);
-    doc.font('Helvetica-Bold').text(fmtDateTime(r.Date_Time), { continued: true });
-    doc.font('Helvetica').text(`   plant=${fmt(r.Plant_Id)}  result=${overall}`);
-    doc.text(
-      `    Circlip=${fmt(r.Circlip_Result)} (${fmt(r.Circlip_Time)})    ` +
-        `Ring=${fmt(r.Ring_Result)} (${fmt(r.Ring_Time)})    ` +
-        `Ring Count=${r.Ring_Count ?? '-'}    ` +
-        `Unload=${fmt(r.Unloading_Time)}`,
-    );
-    doc.moveDown(0.3);
+    drawTimelineRow(doc, r);
   }
 
   doc.end();
   return doc as unknown as Readable;
 }
 
-function drawTwoColumnTable(doc: PDFKit.PDFDocument, rows: [string, string][]): void {
-  const labelW = 130;
-  for (const [k, v] of rows) {
-    const y = doc.y;
-    doc.font('Helvetica-Bold').text(k, doc.x, y, { width: labelW, continued: false });
-    doc.font('Helvetica').text(v, doc.x + labelW, y, { width: 350 });
-    doc.moveDown(0.15);
-  }
-}
-
-function drawAttemptLine(
-  doc: PDFKit.PDFDocument,
-  args: {
-    kind: 'CIRCLIP' | 'RING';
-    attempt: number;
-    result: string | null;
-    plcTime: string | null;
-    dbTime: string;
-  },
-): void {
-  const tag = `[${args.kind} attempt ${args.attempt}]`.padEnd(22, ' ');
-  const result = (args.result ?? '-').padEnd(6, ' ');
-  doc.font('Courier').text(
-    `${tag} ${result}  PLC: ${fmt(args.plcTime).padEnd(20, ' ')}  DB: ${args.dbTime}`,
-  );
-}
-
-// Re-export to keep the route file lean.
 export function deriveSerializedRecords(rawRecords: Array<Record<string, unknown>>): SamLogRecord[] {
-  // mssql returns Date_Time as a Date; serialize to ISO with offset so the
-  // PDF's Date/Time strings match what the UI shows for the same row.
   return rawRecords.map((r) => ({
     Date_Time: r.Date_Time instanceof Date ? serializeDateTime(r.Date_Time) : (r.Date_Time as string | null),
     Plant_Id: (r.Plant_Id as string) ?? null,
