@@ -7,7 +7,17 @@
    - Install and start Docker Desktop
    - Wait until Docker Desktop is fully running (check system tray)
 
-2. **MS SQL Server** - Database must be accessible
+2. **MS SQL Server** with the `SAM` database already created and the v2.0
+   schema in place (`dbo.SAM_Log`, `dbo.Alarm_Log`, `dbo.Image_Index`,
+   `dbo.maintenance_snapshot`). If you're starting from an empty SQL Server,
+   the v2.0 schema migration must be run before this install.
+
+3. **A SQL login for the application** (e.g. `Sam_Piston`) with `SELECT` on
+   `dbo.SAM_Log`. Step 3 of the installation grants the additional
+   permissions the image subsystem needs.
+
+4. **SQL Server Management Studio (SSMS)** or `sqlcmd` on the install
+   machine — needed to run the schema migration in step 3.
 
 ## Installation Steps
 
@@ -16,39 +26,90 @@
 
 2. **Configure database connection:**
    - Copy `env.template` to `.env`
-   - Edit `.env` file with your database credentials:
-     - `DB_HOST` - Your SQL Server hostname or IP
+   - Edit `.env` with your database credentials:
+     - `DB_HOST` - SQL Server hostname or IP
      - `DB_PORT` - SQL Server port (usually 1433)
-     - `DB_NAME` - Database name
-     - `DB_USER` - Database username
-     - `DB_PASSWORD` - Database password
+     - `DB_NAME` - Database name (default `SAM`)
+     - `DB_USER` - Application SQL login (e.g. `Sam_Piston`)
+     - `DB_PASSWORD` - That login's password
 
    **For Windows:** Use `host.docker.internal\INSTANCE_NAME` for DB_HOST
    **For Linux:** Use the actual IP address or hostname
 
-3. **Configure CV-X image folders (Important):**
+3. **Apply the database migration and grant permissions** (DBA, one-time per install):
+
+   a. Run the schema migration. In SSMS, connect to the SQL Server, open
+      `backend\sql\0001_image_index_columns.sql`, confirm the database
+      dropdown is set to `SAM`, then press F5. Or via `sqlcmd`:
+      ```powershell
+      sqlcmd -S .\SQLEXPRESS -d SAM -E -i backend\sql\0001_image_index_columns.sql
+      ```
+      The script is idempotent — safe to re-run on upgrades. Expect a
+      `Image_Index migration complete.` line and no errors.
+
+   b. Grant the application login the writes the image subsystem needs.
+      Run in SSMS against `SAM` (substitute `Sam_Piston` for whichever
+      login you set as `DB_USER`):
+      ```sql
+      USE SAM;
+      GRANT INSERT ON dbo.Alarm_Log TO Sam_Piston;
+      GRANT SELECT, INSERT, UPDATE, DELETE ON dbo.Image_Index TO Sam_Piston;
+      ```
+      Verify with:
+      ```sql
+      SELECT OBJECT_NAME(major_id) AS object_name, permission_name, state_desc
+      FROM sys.database_permissions p
+      JOIN sys.database_principals u ON u.principal_id = p.grantee_principal_id
+      WHERE u.name = 'Sam_Piston'
+        AND major_id IN (OBJECT_ID('dbo.Alarm_Log'), OBJECT_ID('dbo.Image_Index'));
+      ```
+      You should see `Alarm_Log: INSERT GRANT` and the four
+      `Image_Index: SELECT/INSERT/UPDATE/DELETE GRANT` rows.
+
+4. **Configure CV-X image folders (Important):**
    - The backend reads from `D:\Keyence - CVX` (CV-X live output) and writes
      organized images to `D:\Records Actual` (DMC-rooted, attempt-grouped).
      Both folders are auto-created by `start.bat` if missing.
    - CV-X VisionEditor must save to `D:\Keyence - CVX` directly (no SMB share
-     needed — it's a local path on the SCADA box).
+     needed — it's a local path on the SCADA box). See **Image Integration**
+     below for the required filename format.
    - To override either path, edit `.env`:
      - `INCOMING_IMAGES_PATH` (container path; default `/data/incoming`)
      - `IMAGES_OUTPUT_PATH` (container path; default `/data/images`)
      - The Windows-side host paths are configured in `docker-compose.yml`
        under the `backend.volumes:` block.
 
-4. **Load Docker images:**
+5. **Load Docker images:**
    - Double-click `load-images.bat`
    - Wait for images to load (this may take a few minutes)
 
-5. **Start the application:**
+6. **Start the application:**
    - Double-click `start.bat`
-   - Wait for containers to start
+   - Wait for containers to start (~10 seconds)
 
-6. **Access the application:**
+7. **Access the application:**
    - Open browser: `http://localhost:8080`
    - Or from network: `http://YOUR_SERVER_IP:8080`
+
+8. **Smoke-test the install:**
+   - The dashboard should load with KPI tiles all showing `0` for an
+     empty database, or current production numbers if data exists.
+   - `http://localhost:8080/api/health` should return
+     `{"status":"ok","db":"connected","timestamp":"..."}`.
+   - `http://localhost:8080/api/admin/images/pending` should return
+     `{"count":0,"items":[]}` until CV-X starts writing images.
+
+## Updating an existing install
+
+When pulling a new build over an existing install:
+
+1. Stop the application: `stop.bat`
+2. Replace the package files (preserve `.env` and `data\license\`)
+3. Re-run any new SQL migrations from `backend\sql\` (idempotent — safe
+   to re-apply ones that already ran)
+4. If `env.template` has new variables, copy them into your `.env`
+5. `load-images.bat` to load the updated containers
+6. `start.bat`
 
 ## Stopping the Application
 
@@ -104,6 +165,12 @@ into a structured destination tree under `D:\Records Actual`.
 The backend writes to `D:\Records Actual\<DMC>\<CIRCLIP|RING>\attempt_<N>\<OK|NG>\<original-filename>.jpg`.
 This makes images discoverable both from the UI (Image Viewer page) and by
 hand on the file system. Original filenames are preserved.
+
+Characters in the DMC that Windows forbids in file paths (`< > : " | ? *`)
+are replaced with `_` in the on-disk directory name only — the DMC stored
+in `dbo.Image_Index` and returned by the API is unchanged. So a DMC of
+`[)>.06-VTH16-P234102M110-T260414P501AC8A0092-DB70` lands in
+`D:\Records Actual\[)_.06-VTH16-P234102M110-T260414P501AC8A0092-DB70\…`.
 
 ### Tunables (`.env`)
 

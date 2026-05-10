@@ -2,6 +2,16 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { getImageConfig } from './config.js';
 
+// DMCs commonly contain `>` (and may contain `<`, `:`, `"`, `|`, `?`, `*`)
+// which are illegal in Windows file/directory names. Inside the Linux
+// container the path is fine, but the destination volume is bind-mounted
+// from a Windows host where Explorer/PowerShell cannot traverse those names.
+// Replace each offender with `_` for the on-disk path only — the DMC stored
+// in dbo.Image_Index and returned by the API is unchanged.
+function sanitizeForWindowsFs(s: string): string {
+  return s.replace(/[<>:"|?*]/g, '_');
+}
+
 // Moves (or copies, per env) a parsed source file into the destination
 // hierarchy:  <output>/<DMC>/<CIRCLIP|RING>/attempt_<N>/<OK|NG>/<basename>
 //
@@ -21,7 +31,7 @@ export async function moveFileToDestination(args: {
 
   const destDir = path.join(
     cfg.outputPath,
-    args.fullDmc,
+    sanitizeForWindowsFs(args.fullDmc),
     args.inspectionType,
     attemptLabel,
     okLabel,
