@@ -22,6 +22,8 @@ const ImageGroupView = forwardRef<HTMLDivElement, ImageGroupViewProps>(function 
     return group.images;
   }, [filter, group.images]);
 
+  const okCount = group.images.filter((i) => i.ok_flag === 0).length;
+  const ngCount = group.images.filter((i) => i.ok_flag === 1).length;
   const missing = group.expected - group.indexed;
 
   return (
@@ -31,6 +33,12 @@ const ImageGroupView = forwardRef<HTMLDivElement, ImageGroupViewProps>(function 
         <h3 className="text-base font-semibold text-gray-800">{groupTitle(group)}</h3>
         <span className="text-sm text-gray-500">
           {group.indexed} / {group.expected}
+        </span>
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+          {okCount} OK
+        </span>
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-red-50 text-red-700 border border-red-200">
+          {ngCount} NG
         </span>
         {missing > 0 && (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
