@@ -22,6 +22,12 @@ export interface ImageConfig {
   expectedRingPictures: number;
   expectedCirclipPictures: number;
   matchToleranceSeconds: number;
+  // Small forward-slack: how many seconds the image's mtime is allowed to
+  // be EARLIER than the SAM_Log Ring_Time / Circlip_Time. Handles the edge
+  // case where CV-X writes a file slightly before the PLC logs the
+  // inspection result. Should be much smaller than the typical interval
+  // between consecutive attempts so re-inspections don't cross-pollinate.
+  matchPreToleranceSeconds: number;
   pendingTimeoutMinutes: number;
   retentionDays: number;
   fileHandling: 'move' | 'copy';
@@ -49,6 +55,7 @@ export function getImageConfig(): ImageConfig {
     expectedRingPictures: envInt('EXPECTED_RING_PICTURES_PER_ATTEMPT', 25),
     expectedCirclipPictures: envInt('EXPECTED_CIRCLIP_PICTURES_PER_ATTEMPT', 1),
     matchToleranceSeconds: envInt('IMAGE_MATCH_TOLERANCE_SECONDS', 300),
+    matchPreToleranceSeconds: envInt('IMAGE_MATCH_PRE_TOLERANCE_SECONDS', 60),
     pendingTimeoutMinutes: envInt('IMAGE_PENDING_TIMEOUT_MINUTES', 15),
     retentionDays: envInt('IMAGE_RETENTION_DAYS', 365),
     fileHandling,

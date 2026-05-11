@@ -180,7 +180,8 @@ in `dbo.Image_Index` and returned by the API is unchanged. So a DMC of
 | `CAM_RING` / `CAM_CIRCLIP` | `CAM1` / `CAM2` | CAM-to-inspection-type mapping |
 | `EXPECTED_RING_PICTURES_PER_ATTEMPT` | `25` | Drives the "Missing N images" badge |
 | `EXPECTED_CIRCLIP_PICTURES_PER_ATTEMPT` | `1` | Same, for circlip |
-| `IMAGE_MATCH_TOLERANCE_SECONDS` | `300` | ± window when matching image to SAM_Log |
+| `IMAGE_MATCH_TOLERANCE_SECONDS` | `300` | Max seconds the image's `mtime` is allowed to be AFTER the SAM_Log `Ring_Time` / `Circlip_Time` |
+| `IMAGE_MATCH_PRE_TOLERANCE_SECONDS` | `60` | Max seconds the image's `mtime` is allowed to be BEFORE the SAM_Log timestamp. Keep small (≪ time between consecutive attempts) so re-inspection attempts don't share windows |
 | `IMAGE_PENDING_TIMEOUT_MINUTES` | `15` | How long to wait for a SAM_Log row before giving up |
 | `IMAGE_FILE_HANDLING` | `move` | `move` or `copy` |
 | `IMAGE_RETENTION_DAYS` | `365` | Daily FIFO purge |

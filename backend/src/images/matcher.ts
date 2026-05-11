@@ -56,26 +56,33 @@ export async function matchToSamLog(input: MatchInput): Promise<MatchResult> {
     return checkPending(input.capturedAt);
   }
 
-  // RING — pick the closest Ring_Time within tolerance.
+  // RING — asymmetric window: image's capturedAt is allowed to be up to
+  // `pre` seconds BEFORE Ring_Time (CV-X may finish the file write a moment
+  // before the PLC logs the result) and up to `tol` seconds AFTER. We pick
+  // the LATEST Ring_Time inside the window — when attempts are close
+  // together, an image written in attempt N's tail must stay on attempt N
+  // and not cross over into attempt N+1's window.
   const result = await pool
     .request()
     .input('dmc', input.fullDmc)
     .input('capturedAt', capturedWall)
     .input('tol', cfg.matchToleranceSeconds)
+    .input('pre', cfg.matchPreToleranceSeconds)
     .query(`
       SELECT TOP 1 Ring_Count
       FROM dbo.SAM_Log
       WHERE DMC = @dmc
         AND Ring_Time IS NOT NULL
         AND Ring_Result IS NOT NULL
-        AND ABS(DATEDIFF(SECOND,
+        AND DATEDIFF(SECOND,
               TRY_CONVERT(DATETIME2, Ring_Time, 120),
               TRY_CONVERT(DATETIME2, @capturedAt, 120)
-            )) <= @tol
-      ORDER BY ABS(DATEDIFF(SECOND,
-                TRY_CONVERT(DATETIME2, Ring_Time, 120),
-                TRY_CONVERT(DATETIME2, @capturedAt, 120)
-              )) ASC
+            ) >= -@pre
+        AND DATEDIFF(SECOND,
+              TRY_CONVERT(DATETIME2, Ring_Time, 120),
+              TRY_CONVERT(DATETIME2, @capturedAt, 120)
+            ) <= @tol
+      ORDER BY TRY_CONVERT(DATETIME2, Ring_Time, 120) DESC
     `);
 
   if (result.recordset.length > 0) {
