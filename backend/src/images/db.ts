@@ -18,7 +18,9 @@ export interface PendingImageRow {
   source_counter: number | null;
   file_path: string;
   camera_id: string | null;
-  ok_flag: number | null;
+  // mssql returns BIT columns as JS booleans (not 0/1). Callers must
+  // coerce via `row.ok_flag ? 1 : 0` rather than strict-equality on a number.
+  ok_flag: boolean | null;
   session_folder: string | null;
 }
 

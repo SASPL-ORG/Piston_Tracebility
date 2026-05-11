@@ -86,7 +86,8 @@ async function processPendingRow(row: PendingImageRow): Promise<RowOutcome> {
     fullDmc: row.DMC,
     inspectionType: row.inspection_type,
     ringCount,
-    okFlag: row.ok_flag === 1 ? 1 : 0,
+    // BIT columns come back as JS booleans, not 0/1.
+    okFlag: row.ok_flag ? 1 : 0,
   });
   await updateResolvedRow(row.id, ringCount, pictureNo, destPath);
   return 'resolved';

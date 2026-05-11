@@ -59,7 +59,9 @@ function buildGroups(rows: ImageRow[]): ImageGroup[] {
     const item: ImageItem = {
       id: r.id,
       picture_no: r.picture_no ?? 0,
-      ok_flag: r.ok_flag === 1 ? 1 : 0,
+      // BIT columns come back from mssql as booleans, not 0/1 — so
+      // `r.ok_flag === 1` was always false and every image showed as OK.
+      ok_flag: r.ok_flag ? 1 : 0,
       camera_id: r.camera_id ?? '',
       captured_at: serializeDateTime(r.captured_at),
     };
@@ -217,7 +219,7 @@ export default async function imageRoutes(app: FastifyInstance) {
         captured_at: Date | string | null;
         source_counter: number | null;
         camera_id: string | null;
-        ok_flag: number | null;
+        ok_flag: boolean | number | null;
         session_folder: string | null;
         file_path: string;
       }) => ({
@@ -227,7 +229,8 @@ export default async function imageRoutes(app: FastifyInstance) {
         captured_at: serializeDateTime(r.captured_at),
         source_counter: r.source_counter,
         camera_id: r.camera_id,
-        ok_flag: r.ok_flag,
+        // Normalize the BIT column to 0/1 (mssql returns boolean).
+        ok_flag: r.ok_flag == null ? null : r.ok_flag ? 1 : 0,
         session_folder: r.session_folder,
         file_path: r.file_path,
       }),
