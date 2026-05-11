@@ -18,7 +18,9 @@ interface LightboxState {
 export default function Images() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [dmc, setDmc] = useState(searchParams.get('dmc') || '');
-  const [searchedDmc, setSearchedDmc] = useState(searchParams.get('dmc') || '');
+  // searchedDmc starts empty so the auto-load effect below fires on first
+  // mount when the URL already has ?dmc=… (deep-link from Part Trace).
+  const [searchedDmc, setSearchedDmc] = useState('');
   const [groups, setGroups] = useState<ImageGroup[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
