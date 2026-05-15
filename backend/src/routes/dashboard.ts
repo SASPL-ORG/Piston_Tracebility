@@ -1,10 +1,18 @@
 import { FastifyInstance } from 'fastify';
 import { getPool } from '../db/connection.js';
-import { bindFilterInputs, buildLatestPerDmcCte, STATE_CASE_SQL } from '../db/state.js';
+import {
+  bindProductionDayFilterInputs,
+  buildLatestPerDmcCte,
+  STATE_CASE_SQL,
+  SHIFT_CASE_SQL,
+} from '../db/state.js';
+import { SHIFTS } from '../config/shifts.js';
 import type {
   DashboardResponse,
   ProductionGranularity,
   StateBreakdownItem,
+  ShiftBreakdownItem,
+  ShiftId,
   PartState,
 } from '../types/index.js';
 
@@ -59,7 +67,7 @@ export default async function dashboardRoutes(app: FastifyInstance) {
 
     // KPIs.
     const kpiRequest = pool.request();
-    const kpiConds = bindFilterInputs(kpiRequest, filters);
+    const kpiConds = bindProductionDayFilterInputs(kpiRequest, filters);
     const kpiCte = buildLatestPerDmcCte(kpiConds);
     const kpiResult = await kpiRequest.query(`
       ${kpiCte}
@@ -80,7 +88,7 @@ export default async function dashboardRoutes(app: FastifyInstance) {
     // Production breakdown — three buckets per time slice. In_Progress is
     // its own column so the chart doesn't paint pending parts as failures.
     const prodRequest = pool.request();
-    const prodConds = bindFilterInputs(prodRequest, filters);
+    const prodConds = bindProductionDayFilterInputs(prodRequest, filters);
     const prodCte = buildLatestPerDmcCte(prodConds);
     const prodResult = await prodRequest.query(`
       ${prodCte}
@@ -99,7 +107,7 @@ export default async function dashboardRoutes(app: FastifyInstance) {
     // per state. Replaces the old plant donut, which was degenerate when
     // each install talks to one machine's DB.
     const stateRequest = pool.request();
-    const stateConds = bindFilterInputs(stateRequest, filters);
+    const stateConds = bindProductionDayFilterInputs(stateRequest, filters);
     const stateCte = buildLatestPerDmcCte(stateConds);
     const stateResult = await stateRequest.query(`
       ${stateCte}
@@ -128,6 +136,50 @@ export default async function dashboardRoutes(app: FastifyInstance) {
       count: byState.get(s) ?? 0,
     })).filter((s) => s.count > 0);
 
+    // Shift breakdown — same KPIs as the top-line tiles, sliced by the
+    // minute-of-day of the latest row's Date_Time. Within the production-day
+    // window (07:30 → next-day 07:30), each part falls into exactly one
+    // shift, so the three rows sum to the top-line KPI values.
+    const shiftRequest = pool.request();
+    const shiftConds = bindProductionDayFilterInputs(shiftRequest, filters);
+    const shiftCte = buildLatestPerDmcCte(shiftConds);
+    const shiftResult = await shiftRequest.query(`
+      ${shiftCte}
+      SELECT
+        ${SHIFT_CASE_SQL} AS shift,
+        COUNT(DISTINCT l.DMC) AS total,
+        SUM(CASE WHEN ${STATE_CASE_SQL} IN ('PACKED','RING_OK') THEN 1 ELSE 0 END) AS passed,
+        SUM(CASE WHEN ${STATE_CASE_SQL} = 'CIRCLIP_SCRAP' THEN 1 ELSE 0 END) AS circlip_fail,
+        SUM(CASE WHEN ${STATE_CASE_SQL} = 'RING_NG' THEN 1 ELSE 0 END) AS ring_fail,
+        SUM(CASE WHEN ${STATE_CASE_SQL} = 'IN_PROGRESS' THEN 1 ELSE 0 END) AS in_progress,
+        SUM(CASE WHEN p.max_ring_count > 1 THEN 1 ELSE 0 END) AS reinspected
+      FROM latest l
+      INNER JOIN per_dmc p ON p.DMC = l.DMC
+      GROUP BY ${SHIFT_CASE_SQL}
+    `);
+    const byShift = new Map<ShiftId, Record<string, number>>(
+      shiftResult.recordset.map(
+        (r: { shift: ShiftId } & Record<string, number>) => [r.shift, r],
+      ),
+    );
+    const shiftBreakdown: ShiftBreakdownItem[] = SHIFTS.map((def) => {
+      const row = byShift.get(def.id);
+      const t = (row?.total as number) ?? 0;
+      const p = (row?.passed as number) ?? 0;
+      return {
+        shift: def.id,
+        label: def.label,
+        hours: def.hours,
+        total: t,
+        passed: p,
+        circlip_fail: (row?.circlip_fail as number) ?? 0,
+        ring_fail: (row?.ring_fail as number) ?? 0,
+        in_progress: (row?.in_progress as number) ?? 0,
+        reinspected: (row?.reinspected as number) ?? 0,
+        pass_rate: t > 0 ? Math.round((p / t) * 1000) / 10 : 0,
+      };
+    });
+
     const response: DashboardResponse = {
       kpis: {
         total,
@@ -141,6 +193,7 @@ export default async function dashboardRoutes(app: FastifyInstance) {
       granularity,
       production_breakdown: prodResult.recordset,
       state_breakdown: stateBreakdown,
+      shift_breakdown: shiftBreakdown,
     };
     return response;
   });

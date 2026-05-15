@@ -54,11 +54,27 @@ export interface StateBreakdownItem {
   count: number;
 }
 
+export type ShiftId = 'A' | 'B' | 'C';
+
+export interface ShiftBreakdownItem {
+  shift: ShiftId;
+  label: string;
+  hours: string;
+  total: number;
+  passed: number;
+  circlip_fail: number;
+  ring_fail: number;
+  in_progress: number;
+  reinspected: number;
+  pass_rate: number;
+}
+
 export interface DashboardResponse {
   kpis: DashboardKpis;
   granularity: ProductionGranularity;
   production_breakdown: ProductionBucket[];
   state_breakdown: StateBreakdownItem[];
+  shift_breakdown: ShiftBreakdownItem[];
 }
 
 export interface PaginatedResponse<T> {

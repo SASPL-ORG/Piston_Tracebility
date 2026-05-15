@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { format } from 'date-fns';
 import { Package, CheckCircle, XCircle, AlertTriangle, Percent, RefreshCw, Clock, RotateCw } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import KpiCard from '../components/KpiCard';
 import DateRangePicker from '../components/DateRangePicker';
+import ShiftCard from '../components/ShiftCard';
 import {
   fetchDashboard,
   DashboardResponse,
@@ -11,6 +11,7 @@ import {
   PART_STATE_LABEL,
   ProductionGranularity,
 } from '../lib/api';
+import { getProductionDate } from '../lib/shifts';
 
 const STATE_COLORS: Record<PartState, string> = {
   PACKED: '#10b981', // green
@@ -34,7 +35,10 @@ function granularityLabel(g: ProductionGranularity): string {
 }
 
 export default function Dashboard() {
-  const today = format(new Date(), 'yyyy-MM-dd');
+  // Production-date anchor: before 07:30 in the morning this resolves to
+  // yesterday's calendar date, because Shift C from the previous day is
+  // still in progress and the operator expects to see its production.
+  const today = getProductionDate();
   const [from, setFrom] = useState(today);
   const [to, setTo] = useState(today);
   const [data, setData] = useState<DashboardResponse | null>(null);
@@ -88,7 +92,9 @@ export default function Dashboard() {
         </button>
       </div>
 
-      {/* Filters — single-machine install, no plant filter */}
+      {/* Filters — single-machine install, no plant filter. The today
+          override makes "Today" / "7 Days" / "This Month" all anchor on
+          the production-date rollover (07:30 boundary). */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
         <DateRangePicker
           from={from}
@@ -96,6 +102,7 @@ export default function Dashboard() {
           plant=""
           plants={[]}
           onChange={(f, t) => handleDateChange(f, t)}
+          todayOverride={today}
         />
       </div>
 
@@ -113,6 +120,16 @@ export default function Dashboard() {
           <KpiCard title="In Progress" value={data.kpis.in_progress.toLocaleString()} icon={Clock} color="purple" subtitle="Ring not yet recorded" />
           <KpiCard title="Reinspected" value={data.kpis.reinspected.toLocaleString()} icon={RotateCw} color="indigo" subtitle="Multi-attempt parts" />
           <KpiCard title="Pass Rate" value={`${data.kpis.pass_rate}%`} icon={Percent} color="slate" subtitle="Overall yield" />
+        </div>
+      )}
+
+      {/* Per-shift breakdown — three cards side-by-side, summing to the
+          main KPI tiles above. Empty shifts show as all-zero cards. */}
+      {data && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {data.shift_breakdown.map((s) => (
+            <ShiftCard key={s.shift} data={s} />
+          ))}
         </div>
       )}
 

@@ -52,6 +52,48 @@ export function bindFilterInputs(request: sql.Request, filters: DmcFilter): stri
   return conds;
 }
 
+// Production-day variant of the filter binding. Used by the dashboard so a
+// "date" in the URL maps to [date 07:30, (date+1) 07:30) — meaning all three
+// shifts of that production date are in scope, including Shift C which
+// spans midnight into the next calendar date.
+export function bindProductionDayFilterInputs(
+  request: sql.Request,
+  filters: DmcFilter,
+): string[] {
+  const conds: string[] = [];
+  if (filters.from) {
+    conds.push('Date_Time >= @prod_start');
+    request.input('prod_start', `${filters.from} 07:30:00`);
+  }
+  if (filters.to) {
+    // Half-open upper bound: (to + 1 day) 07:30 — so the inclusive "to" date
+    // covers its own Shift C all the way into the next morning.
+    conds.push("Date_Time < DATEADD(DAY, 1, @prod_end_anchor)");
+    request.input('prod_end_anchor', `${filters.to} 07:30:00`);
+  }
+  if (filters.plant) {
+    conds.push('Plant_Id = @plant');
+    request.input('plant', filters.plant);
+  }
+  return conds;
+}
+
+// Shift classification by latest-row Date_Time hour-of-day. Used in
+// combination with bindProductionDayFilterInputs so the windows align with
+// the production-day boundaries:
+//   Shift A: 07:30 – 15:30  ([450, 930))
+//   Shift B: 15:30 – 23:30  ([930, 1410))
+//   Shift C: 23:30 – 07:30  (>= 1410 OR < 450 — wraps midnight)
+// Inside the production-day window for date X, Shift C's pre-07:30 portion
+// belongs to X (not X+1) because of the production-day boundary.
+export const SHIFT_CASE_SQL = `CASE
+  WHEN (DATEPART(HOUR, l.Date_Time) * 60 + DATEPART(MINUTE, l.Date_Time)) >= 450
+   AND (DATEPART(HOUR, l.Date_Time) * 60 + DATEPART(MINUTE, l.Date_Time)) <  930 THEN 'A'
+  WHEN (DATEPART(HOUR, l.Date_Time) * 60 + DATEPART(MINUTE, l.Date_Time)) >= 930
+   AND (DATEPART(HOUR, l.Date_Time) * 60 + DATEPART(MINUTE, l.Date_Time)) < 1410 THEN 'B'
+  ELSE 'C'
+END`;
+
 // Returns a CTE prefix that yields:
 //   filtered  - rows passing the SAM_Log filter
 //   per_dmc   - one row per DMC: DMC, max_ring_count, has_circlip_fail, first_seen, last_seen
