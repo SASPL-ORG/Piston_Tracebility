@@ -42,18 +42,26 @@ export default function DateRangePicker({ from, to, plant, plants, onChange, tod
     <div className="flex flex-wrap items-center gap-3">
       {/* Presets */}
       <div className="flex gap-1">
-        {presets.map((p) => (
-          <button
-            key={p.label}
-            onClick={() => {
-              const r = p.getRange(today);
-              onChange(r.from, r.to, plant);
-            }}
-            className="px-3 py-1.5 text-xs font-medium rounded-md bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 hover:border-gray-300 transition-colors"
-          >
-            {p.label}
-          </button>
-        ))}
+        {presets.map((p) => {
+          const r = p.getRange(today);
+          // Active if the current From/To matches this preset's range
+          // exactly. Manually editing either picker breaks the match and
+          // all chips fall back to the unselected state.
+          const active = r.from === from && r.to === to;
+          return (
+            <button
+              key={p.label}
+              onClick={() => onChange(r.from, r.to, plant)}
+              className={
+                active
+                  ? 'px-3 py-1.5 text-xs font-medium rounded-md border border-blue-600 bg-blue-600 text-white transition-colors'
+                  : 'px-3 py-1.5 text-xs font-medium rounded-md bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 hover:border-gray-300 transition-colors'
+              }
+            >
+              {p.label}
+            </button>
+          );
+        })}
       </div>
 
       <div className="h-6 w-px bg-gray-200 hidden sm:block" />
