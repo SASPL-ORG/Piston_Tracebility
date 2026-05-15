@@ -10,7 +10,6 @@ import {
   PartState,
   PART_STATE_LABEL,
   ProductionGranularity,
-  SHIFT_HOURS,
 } from '../lib/api';
 
 const STATE_COLORS: Record<PartState, string> = {
@@ -114,49 +113,6 @@ export default function Dashboard() {
           <KpiCard title="In Progress" value={data.kpis.in_progress.toLocaleString()} icon={Clock} color="purple" subtitle="Ring not yet recorded" />
           <KpiCard title="Reinspected" value={data.kpis.reinspected.toLocaleString()} icon={RotateCw} color="indigo" subtitle="Multi-attempt parts" />
           <KpiCard title="Pass Rate" value={`${data.kpis.pass_rate}%`} icon={Percent} color="slate" subtitle="Overall yield" />
-        </div>
-      )}
-
-      {/* Shift breakdown */}
-      {data && (
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-1 h-6 bg-blue-600 rounded-full" />
-            <h3 className="text-base font-semibold text-gray-800">Shift Summary</h3>
-            <span className="text-xs text-gray-400">within the selected date range</span>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-50 border-b border-gray-200 text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                  <th className="px-3 py-2 text-left">Shift</th>
-                  <th className="px-3 py-2 text-left">Hours</th>
-                  <th className="px-3 py-2 text-right">Total</th>
-                  <th className="px-3 py-2 text-right">Passed</th>
-                  <th className="px-3 py-2 text-right">Circlip Fail</th>
-                  <th className="px-3 py-2 text-right">Ring Fail</th>
-                  <th className="px-3 py-2 text-right">In Progress</th>
-                  <th className="px-3 py-2 text-right">Reinspected</th>
-                  <th className="px-3 py-2 text-right">Pass Rate</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {data.shift_breakdown.map((s) => (
-                  <tr key={s.shift} className="hover:bg-gray-50/50">
-                    <td className="px-3 py-2 font-semibold text-gray-800">Shift {s.shift}</td>
-                    <td className="px-3 py-2 text-gray-500 font-mono text-xs">{SHIFT_HOURS[s.shift]}</td>
-                    <td className="px-3 py-2 text-right font-semibold text-gray-900">{s.total.toLocaleString()}</td>
-                    <td className="px-3 py-2 text-right text-emerald-700">{s.passed.toLocaleString()}</td>
-                    <td className="px-3 py-2 text-right text-red-700">{s.circlip_fail.toLocaleString()}</td>
-                    <td className="px-3 py-2 text-right text-amber-700">{s.ring_fail.toLocaleString()}</td>
-                    <td className="px-3 py-2 text-right text-purple-700">{s.in_progress.toLocaleString()}</td>
-                    <td className="px-3 py-2 text-right text-indigo-700">{s.reinspected.toLocaleString()}</td>
-                    <td className="px-3 py-2 text-right font-semibold text-gray-900">{s.pass_rate}%</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
         </div>
       )}
 

@@ -54,31 +54,11 @@ export interface StateBreakdownItem {
   count: number;
 }
 
-export type ShiftId = 'A' | 'B' | 'C';
-
-export interface ShiftBreakdownItem {
-  shift: ShiftId;
-  total: number;
-  passed: number;
-  circlip_fail: number;
-  ring_fail: number;
-  in_progress: number;
-  reinspected: number;
-  pass_rate: number;
-}
-
-export const SHIFT_HOURS: Record<ShiftId, string> = {
-  A: '07:30 – 15:30',
-  B: '15:30 – 23:30',
-  C: '23:30 – 07:30',
-};
-
 export interface DashboardResponse {
   kpis: DashboardKpis;
   granularity: ProductionGranularity;
   production_breakdown: ProductionBucket[];
   state_breakdown: StateBreakdownItem[];
-  shift_breakdown: ShiftBreakdownItem[];
 }
 
 export interface PaginatedResponse<T> {
