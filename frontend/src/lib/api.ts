@@ -55,26 +55,13 @@ export interface StateBreakdownItem {
 }
 
 export type ShiftId = 'A' | 'B' | 'C';
-
-export interface ShiftBreakdownItem {
-  shift: ShiftId;
-  label: string;
-  hours: string;
-  total: number;
-  passed: number;
-  circlip_fail: number;
-  ring_fail: number;
-  in_progress: number;
-  reinspected: number;
-  pass_rate: number;
-}
+export type ShiftScope = 'all' | ShiftId;
 
 export interface DashboardResponse {
   kpis: DashboardKpis;
   granularity: ProductionGranularity;
   production_breakdown: ProductionBucket[];
   state_breakdown: StateBreakdownItem[];
-  shift_breakdown: ShiftBreakdownItem[];
 }
 
 export interface PaginatedResponse<T> {
@@ -101,9 +88,14 @@ export interface PartResponse {
   summary: PartTraceSummary;
 }
 
-export function fetchDashboard(from: string, to: string, plant?: string): Promise<DashboardResponse> {
+export function fetchDashboard(
+  from: string,
+  to: string,
+  options?: { plant?: string; shift?: ShiftScope },
+): Promise<DashboardResponse> {
   const params = new URLSearchParams({ from, to });
-  if (plant) params.set('plant', plant);
+  if (options?.plant) params.set('plant', options.plant);
+  if (options?.shift && options.shift !== 'all') params.set('shift', options.shift);
   return fetchJson(`/dashboard?${params}`);
 }
 

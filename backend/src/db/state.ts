@@ -94,6 +94,20 @@ export const SHIFT_CASE_SQL = `CASE
   ELSE 'C'
 END`;
 
+// Outer-WHERE fragment for the shift toggle. Returns `1 = 1` when shift is
+// undefined ("All" scope). When a specific shift is requested, this filters
+// the per-DMC result set by the latest row's shift — so each part is
+// attributed to exactly one shift and the sum invariant
+// (All = Shift A + Shift B + Shift C) holds.
+//
+// MUST be applied AFTER `latest`/`per_dmc` have been computed (i.e. in the
+// outer SELECT's WHERE) — never inside `filtered`, which would dedup parts
+// per-shift and break the invariant.
+export function shiftWhereSql(shift: 'A' | 'B' | 'C' | undefined): string {
+  if (!shift) return '1 = 1';
+  return `${SHIFT_CASE_SQL} = '${shift}'`;
+}
+
 // Returns a CTE prefix that yields:
 //   filtered  - rows passing the SAM_Log filter
 //   per_dmc   - one row per DMC: DMC, max_ring_count, has_circlip_fail, first_seen, last_seen

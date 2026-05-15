@@ -1,17 +1,23 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Package, CheckCircle, XCircle, AlertTriangle, Percent, RefreshCw, Clock, RotateCw } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import clsx from 'clsx';
 import KpiCard from '../components/KpiCard';
 import DateRangePicker from '../components/DateRangePicker';
-import ShiftCard from '../components/ShiftCard';
 import {
   fetchDashboard,
   DashboardResponse,
   PartState,
   PART_STATE_LABEL,
   ProductionGranularity,
+  ShiftScope,
 } from '../lib/api';
-import { getProductionDate } from '../lib/shifts';
+import { getProductionDate, SHIFTS } from '../lib/shifts';
+
+const SHIFT_OPTIONS: { value: ShiftScope; label: string }[] = [
+  { value: 'all', label: 'All' },
+  ...SHIFTS.map((s) => ({ value: s.id, label: s.label })),
+];
 
 const STATE_COLORS: Record<PartState, string> = {
   PACKED: '#10b981', // green
@@ -41,6 +47,10 @@ export default function Dashboard() {
   const today = getProductionDate();
   const [from, setFrom] = useState(today);
   const [to, setTo] = useState(today);
+  // Shift scope composes with the date filter — they're independent. Default
+  // 'all' shows the full date range unscoped; A/B/C narrows every widget on
+  // the page to that shift's window within the date range.
+  const [shift, setShift] = useState<ShiftScope>('all');
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -49,14 +59,14 @@ export default function Dashboard() {
     setLoading(true);
     setError('');
     try {
-      const result = await fetchDashboard(from, to);
+      const result = await fetchDashboard(from, to, { shift });
       setData(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load dashboard');
     } finally {
       setLoading(false);
     }
-  }, [from, to]);
+  }, [from, to, shift]);
 
   useEffect(() => {
     loadData();
@@ -92,10 +102,10 @@ export default function Dashboard() {
         </button>
       </div>
 
-      {/* Filters — single-machine install, no plant filter. The today
-          override makes "Today" / "7 Days" / "This Month" all anchor on
-          the production-date rollover (07:30 boundary). */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
+      {/* Filters — date range + shift scope. Shift filter composes with
+          (does not change) the date range. The today override anchors all
+          date presets on the production-date rollover (07:30). */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 space-y-3">
         <DateRangePicker
           from={from}
           to={to}
@@ -104,6 +114,25 @@ export default function Dashboard() {
           onChange={(f, t) => handleDateChange(f, t)}
           todayOverride={today}
         />
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-gray-500 font-medium">Shift:</label>
+          <div className="inline-flex rounded-md border border-gray-200 overflow-hidden">
+            {SHIFT_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setShift(opt.value)}
+                className={clsx(
+                  'px-3 py-1.5 text-xs font-medium transition-colors',
+                  shift === opt.value
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white text-gray-600 hover:bg-gray-50',
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {error && (
@@ -120,16 +149,6 @@ export default function Dashboard() {
           <KpiCard title="In Progress" value={data.kpis.in_progress.toLocaleString()} icon={Clock} color="purple" subtitle="Ring not yet recorded" />
           <KpiCard title="Reinspected" value={data.kpis.reinspected.toLocaleString()} icon={RotateCw} color="indigo" subtitle="Multi-attempt parts" />
           <KpiCard title="Pass Rate" value={`${data.kpis.pass_rate}%`} icon={Percent} color="slate" subtitle="Overall yield" />
-        </div>
-      )}
-
-      {/* Per-shift breakdown — three cards side-by-side, summing to the
-          main KPI tiles above. Empty shifts show as all-zero cards. */}
-      {data && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {data.shift_breakdown.map((s) => (
-            <ShiftCard key={s.shift} data={s} />
-          ))}
         </div>
       )}
 
