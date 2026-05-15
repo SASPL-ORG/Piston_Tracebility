@@ -1,10 +1,17 @@
 import { FastifyInstance } from 'fastify';
 import { getPool } from '../db/connection.js';
-import { bindFilterInputs, buildLatestPerDmcCte, STATE_CASE_SQL } from '../db/state.js';
+import {
+  bindFilterInputs,
+  buildLatestPerDmcCte,
+  STATE_CASE_SQL,
+  SHIFT_CASE_SQL,
+} from '../db/state.js';
 import type {
   DashboardResponse,
   ProductionGranularity,
   StateBreakdownItem,
+  ShiftBreakdownItem,
+  ShiftId,
   PartState,
 } from '../types/index.js';
 
@@ -128,6 +135,45 @@ export default async function dashboardRoutes(app: FastifyInstance) {
       count: byState.get(s) ?? 0,
     })).filter((s) => s.count > 0);
 
+    // Shift breakdown — same classifier, sliced by Date_Time hour-of-day.
+    // Returns all three shifts even when empty, so the UI table is stable.
+    const shiftRequest = pool.request();
+    const shiftConds = bindFilterInputs(shiftRequest, filters);
+    const shiftCte = buildLatestPerDmcCte(shiftConds);
+    const shiftResult = await shiftRequest.query(`
+      ${shiftCte}
+      SELECT
+        ${SHIFT_CASE_SQL} AS shift,
+        COUNT(DISTINCT l.DMC) AS total,
+        SUM(CASE WHEN ${STATE_CASE_SQL} IN ('PACKED','RING_OK') THEN 1 ELSE 0 END) AS passed,
+        SUM(CASE WHEN ${STATE_CASE_SQL} = 'CIRCLIP_SCRAP' THEN 1 ELSE 0 END) AS circlip_fail,
+        SUM(CASE WHEN ${STATE_CASE_SQL} = 'RING_NG' THEN 1 ELSE 0 END) AS ring_fail,
+        SUM(CASE WHEN ${STATE_CASE_SQL} = 'IN_PROGRESS' THEN 1 ELSE 0 END) AS in_progress,
+        SUM(CASE WHEN p.max_ring_count > 1 THEN 1 ELSE 0 END) AS reinspected
+      FROM latest l
+      INNER JOIN per_dmc p ON p.DMC = l.DMC
+      GROUP BY ${SHIFT_CASE_SQL}
+    `);
+    const SHIFT_ORDER: ShiftId[] = ['A', 'B', 'C'];
+    const byShift = new Map<ShiftId, Record<string, number>>(
+      shiftResult.recordset.map((r: { shift: ShiftId } & Record<string, number>) => [r.shift, r]),
+    );
+    const shiftBreakdown: ShiftBreakdownItem[] = SHIFT_ORDER.map((s) => {
+      const row = byShift.get(s);
+      const t = (row?.total as number) ?? 0;
+      const p = (row?.passed as number) ?? 0;
+      return {
+        shift: s,
+        total: t,
+        passed: p,
+        circlip_fail: (row?.circlip_fail as number) ?? 0,
+        ring_fail: (row?.ring_fail as number) ?? 0,
+        in_progress: (row?.in_progress as number) ?? 0,
+        reinspected: (row?.reinspected as number) ?? 0,
+        pass_rate: t > 0 ? Math.round((p / t) * 1000) / 10 : 0,
+      };
+    });
+
     const response: DashboardResponse = {
       kpis: {
         total,
@@ -141,6 +187,7 @@ export default async function dashboardRoutes(app: FastifyInstance) {
       granularity,
       production_breakdown: prodResult.recordset,
       state_breakdown: stateBreakdown,
+      shift_breakdown: shiftBreakdown,
     };
     return response;
   });

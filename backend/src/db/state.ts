@@ -28,6 +28,20 @@ export const STATE_CASE_SQL = `CASE
   ELSE 'IN_PROGRESS'
 END`;
 
+// Shift classification by latest-row Date_Time hour-of-day:
+//   Shift A: 07:30 – 15:30   (450 <= minute-of-day < 930)
+//   Shift B: 15:30 – 23:30   (930 <= minute-of-day < 1410)
+//   Shift C: 23:30 – 07:30   (everything else — wraps midnight)
+// Uses DATEPART, which reads l.Date_Time's stored components directly
+// (SQL Server stored value is local time set by GETDATE() at insert).
+export const SHIFT_CASE_SQL = `CASE
+  WHEN (DATEPART(HOUR, l.Date_Time) * 60 + DATEPART(MINUTE, l.Date_Time)) >= 450
+   AND (DATEPART(HOUR, l.Date_Time) * 60 + DATEPART(MINUTE, l.Date_Time)) <  930 THEN 'A'
+  WHEN (DATEPART(HOUR, l.Date_Time) * 60 + DATEPART(MINUTE, l.Date_Time)) >= 930
+   AND (DATEPART(HOUR, l.Date_Time) * 60 + DATEPART(MINUTE, l.Date_Time)) < 1410 THEN 'B'
+  ELSE 'C'
+END`;
+
 export interface DmcFilter {
   from?: string;
   to?: string;
