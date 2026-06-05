@@ -1,9 +1,14 @@
 import { FastifyInstance } from 'fastify';
 import { getPool } from '../db/connection.js';
 import { classifyState } from '../db/state.js';
-import { serializeDateTimeFields } from '../db/datetime.js';
+import { serializeDateTime, serializeDateTimeFields } from '../db/datetime.js';
 import { renderPartTracePdf, deriveSerializedRecords } from '../reports/partTracePdf.js';
-import type { PartTraceResponse, SamLogRecord } from '../types/index.js';
+import type {
+  AlarmEvent,
+  AlarmStatus,
+  PartTraceResponse,
+  SamLogRecord,
+} from '../types/index.js';
 
 interface PartParams {
   dmc: string;
@@ -20,6 +25,24 @@ async function fetchPartRecords(dmc: string): Promise<SamLogRecord[]> {
   return result.recordset as SamLogRecord[];
 }
 
+// Loads PLC alarm edge events for this part. BatchID column on PLC_Alarms
+// carries the DMC of whatever piston was active when the alarm fired.
+async function fetchPartAlarms(dmc: string): Promise<AlarmEvent[]> {
+  const pool = await getPool();
+  const result = await pool
+    .request()
+    .input('dmc', dmc)
+    .query(
+      'SELECT ID, LogTime, Alarm, Status FROM dbo.PLC_Alarms WHERE BatchID = @dmc ORDER BY LogTime ASC',
+    );
+  return result.recordset.map((r: { ID: number; LogTime: Date | null; Alarm: string; Status: string }) => ({
+    id: r.ID,
+    logTime: serializeDateTime(r.LogTime),
+    alarm: r.Alarm,
+    status: (r.Status === 'ON' ? 'ON' : 'OFF') as AlarmStatus,
+  }));
+}
+
 function sanitizeForFilename(s: string): string {
   // Filenames can't contain Windows-illegal chars; collapse anything funky to `_`.
   return s.replace(/[<>:"|?*\\/\s]/g, '_').slice(0, 80);
@@ -28,7 +51,12 @@ function sanitizeForFilename(s: string): string {
 export default async function partRoutes(app: FastifyInstance) {
   app.get<{ Params: PartParams }>('/part/:dmc', async (req, reply) => {
     const { dmc } = req.params;
-    const records = await fetchPartRecords(dmc);
+    // Run both queries in parallel — the alarms lookup is independent of the
+    // SAM_Log records and shouldn't sit behind it.
+    const [records, alarms] = await Promise.all([
+      fetchPartRecords(dmc),
+      fetchPartAlarms(dmc),
+    ]);
 
     if (records.length === 0) {
       reply.status(404);
@@ -55,6 +83,7 @@ export default async function partRoutes(app: FastifyInstance) {
         first_seen: records[0].Date_Time,
         last_seen: latest.Date_Time,
       },
+      alarms,
     };
     return response;
   });

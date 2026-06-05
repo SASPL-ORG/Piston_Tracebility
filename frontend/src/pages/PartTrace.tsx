@@ -82,6 +82,7 @@ export default function PartTrace() {
 
   const records: SamLogRecord[] = response?.records ?? [];
   const summary = response?.summary;
+  const alarms = response?.alarms ?? [];
 
   return (
     <div className="space-y-6">
@@ -282,6 +283,50 @@ export default function PartTrace() {
                 );
               })}
             </div>
+          </div>
+
+          {/* Alarm History — PLC alarm edges (ON/OFF) recorded for this DMC
+              while it was the active part. Rendered between Inspection
+              Attempts and Event Timeline, styled to match the former. */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-1 h-6 bg-blue-600 rounded-full" />
+              <h2 className="text-lg font-semibold text-gray-800">Alarm History</h2>
+            </div>
+            {alarms.length === 0 ? (
+              <p className="text-sm text-gray-400 py-2">
+                No alarms recorded during this part's processing.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {alarms.map((a) => (
+                  <div
+                    key={a.id}
+                    className={clsx(
+                      'flex flex-wrap items-center gap-4 px-5 py-3 rounded-lg border-l-4',
+                      a.status === 'ON'
+                        ? 'border-l-red-500 bg-red-50/50'
+                        : 'border-l-gray-400 bg-gray-50/50',
+                    )}
+                  >
+                    <span
+                      className={clsx(
+                        'text-xs font-bold px-2.5 py-1 rounded uppercase tracking-wide',
+                        a.status === 'ON'
+                          ? 'bg-red-500 text-white'
+                          : 'bg-gray-400 text-white',
+                      )}
+                    >
+                      {a.status}
+                    </span>
+                    <span className="text-sm font-bold text-gray-800">{a.alarm}</span>
+                    <span className="text-xs text-gray-500 ml-auto">
+                      Time: {formatDateTime(a.logTime)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Event Timeline */}

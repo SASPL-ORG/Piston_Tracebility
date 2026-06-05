@@ -92,11 +92,21 @@ export interface PartTraceSummary {
   last_seen: string | null;
 }
 
+export type AlarmStatus = 'ON' | 'OFF';
+
+export interface AlarmEvent {
+  id: number;
+  logTime: string | null;
+  alarm: string;
+  status: AlarmStatus;
+}
+
 export interface PartTraceResponse {
   dmc: string;
   total_records: number;
   records: SamLogRecord[];
   summary: PartTraceSummary;
+  alarms: AlarmEvent[];
 }
 
 export interface ImageItem {
