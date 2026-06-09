@@ -18,8 +18,13 @@ export async function indexImage(filePath: string): Promise<void> {
     return;
   }
 
-  // Dedup: have we seen this CV-X frame before?
-  const existing = await findExistingByCounter(parsed.sourceCounter, parsed.cameraId);
+  // Dedup: have we seen this CV-X frame before? (counter, camera, DMC)
+  // tuple — counter alone collides across CV-X counter resets.
+  const existing = await findExistingByCounter(
+    parsed.sourceCounter,
+    parsed.cameraId,
+    parsed.fullDmc,
+  );
   if (existing) {
     // The retry job handles pending → resolved transitions. Just leave it.
     return;

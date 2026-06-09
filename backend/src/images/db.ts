@@ -25,20 +25,25 @@ export interface PendingImageRow {
 }
 
 // Has this CV-X frame been indexed already? Keyed on the global counter +
-// camera, which uniquely identifies a single image regardless of DMC parsing.
+// camera + DMC. The counter alone isn't enough: CV-X resets it on machine
+// restart / storage clear, so a fresh counter=27 from today would collide
+// with last week's counter=27 for a different part. Adding DMC makes the
+// triple uniquely identify one image.
 export async function findExistingByCounter(
   sourceCounter: number,
   cameraId: string,
+  dmc: string,
 ): Promise<ExistingImageRow | null> {
   const pool = await getPool();
   const result = await pool
     .request()
     .input('counter', sourceCounter)
     .input('cam', cameraId)
+    .input('dmc', dmc)
     .query(`
       SELECT TOP 1 id, pending_match, file_path, ring_count, picture_no
       FROM dbo.Image_Index
-      WHERE source_counter = @counter AND camera_id = @cam
+      WHERE source_counter = @counter AND camera_id = @cam AND DMC = @dmc
       ORDER BY id ASC
     `);
   return result.recordset[0] ?? null;
