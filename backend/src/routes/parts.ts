@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { getPool } from '../db/connection.js';
-import { classifyState, stripDmcSeparators, DMC_SEPARATOR_CHARS } from '../db/state.js';
+import { classifyState, hasCirclipRejection, isRejectionReason, stripDmcSeparators, DMC_SEPARATOR_CHARS } from '../db/state.js';
 import { serializeDateTime, serializeDateTimeFields } from '../db/datetime.js';
 import { renderPartTracePdf, deriveSerializedRecords } from '../reports/partTracePdf.js';
 import type {
@@ -57,13 +57,17 @@ function buildEventTimeline(records: SamLogRowWithReason[]): EventTimelineStep[]
   });
 
   // Snap-ring branch — gated on Circlip_Time being stamped.
-  if (!earliest.Circlip_Time) return timeline;
+  if (!earliest.Circlip_Time && !isRejectionReason(earliest.Circlip_Rejection_Reason)) return timeline;
 
   timeline.push({ step: 4, label: 'Gantry 1',                  type: 'intermediate' });
   timeline.push({ step: 5, label: 'Snap Ring Assembly Station', type: 'intermediate' });
   timeline.push({ step: 6, label: 'DMC2 — Barcode Scan',        type: 'intermediate' });
 
-  const circlipFail = earliest.Circlip_Result === 'FAIL';
+  // A rejection reason is a fail even when Circlip_Result was never written —
+  // reasons raised before the inspection completes (recipe/barcode mismatch,
+  // abnormal part, groove anodizing missing) stop the part with a NULL result.
+  const circlipFail =
+    earliest.Circlip_Result === 'FAIL' || isRejectionReason(earliest.Circlip_Rejection_Reason);
   timeline.push({
     step: 7,
     label: 'Circlip Inspection',
@@ -91,7 +95,8 @@ function buildEventTimeline(records: SamLogRowWithReason[]): EventTimelineStep[]
   timeline.push({ step: 11, label: 'Ring Part Presence', type: 'intermediate' });
   timeline.push({ step: 12, label: 'DMC3 — Barcode Scan', type: 'intermediate' });
 
-  const ringFail = latest.Ring_Result === 'FAIL';
+  const ringFail =
+    latest.Ring_Result === 'FAIL' || isRejectionReason(latest.Ring_Rejection_Reason);
   timeline.push({
     step: 13,
     label: 'Ring Inspection',
@@ -200,7 +205,7 @@ export default async function partRoutes(app: FastifyInstance) {
 
     serializeDateTimeFields(records as unknown as Record<string, unknown>[]);
     const lastRow = records[records.length - 1];
-    const hasCirclipFail = records.some((r) => r.Circlip_Result === 'FAIL');
+    const hasCirclipFail = hasCirclipRejection(records);
     const totalAttempts = records.reduce(
       (max, r) => Math.max(max, r.Ring_Count ?? 0),
       0,

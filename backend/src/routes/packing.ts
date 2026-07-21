@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { getPool } from '../db/connection.js';
-import { classifyState, stripDmcSeparators, DMC_SEPARATOR_CHARS } from '../db/state.js';
+import { classifyState, hasCirclipRejection, stripDmcSeparators, DMC_SEPARATOR_CHARS } from '../db/state.js';
 import { serializeDateTime } from '../db/datetime.js';
 import { classifyShift, type ShiftId } from '../config/shifts.js';
 import type { SamLogRecord } from '../types/index.js';
@@ -50,7 +50,7 @@ async function fetchByScan(scan: string): Promise<SamLogRecord[]> {
 // the circlip PASS/Time only lives on the first row, so merge it onto latest).
 function deriveState(records: SamLogRecord[]) {
   const lastRow = records[records.length - 1];
-  const hasCirclipFail = records.some((r) => r.Circlip_Result === 'FAIL');
+  const hasCirclipFail = hasCirclipRejection(records);
   const circlipRow =
     records.find((r) => r.Circlip_Result === 'PASS') ??
     records.find((r) => r.Circlip_Result !== null);
@@ -112,7 +112,7 @@ function buildPartInfo(records: SamLogRecord[]): PartInfoForOperator {
   // Snap ring (= Circlip) result lives on the row that actually ran the
   // circlip step, which isn't always the latest row — same merge rule as
   // deriveState above. Treat any FAIL in the chain as FAIL.
-  const hasCirclipFail = records.some((r) => r.Circlip_Result === 'FAIL');
+  const hasCirclipFail = hasCirclipRejection(records);
   const circlipRow =
     records.find((r) => r.Circlip_Result === 'PASS') ??
     records.find((r) => r.Circlip_Result !== null);

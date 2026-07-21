@@ -1,6 +1,6 @@
 import PDFDocument from 'pdfkit';
 import type { Readable } from 'stream';
-import { classifyState } from '../db/state.js';
+import { classifyState, hasCirclipRejection } from '../db/state.js';
 import { serializeDateTime } from '../db/datetime.js';
 import type { PartState, SamLogRecord } from '../types/index.js';
 
@@ -155,7 +155,7 @@ export function renderPartTracePdf(input: PartTracePdfInput): Readable {
   const x0 = doc.page.margins.left;
 
   const latest = records[records.length - 1];
-  const hasCirclipFail = records.some((r) => r.Circlip_Result === 'FAIL');
+  const hasCirclipFail = hasCirclipRejection(records);
   const totalAttempts = records.reduce((max, r) => Math.max(max, r.Ring_Count ?? 0), 0);
   const state = classifyState(latest, hasCirclipFail);
 

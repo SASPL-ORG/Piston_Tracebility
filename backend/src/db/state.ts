@@ -25,6 +25,60 @@ export interface SamLogRowForState {
   Ring_Result: string | null;
   Unloading_Time: string | null;
   Result: string | null;
+  Circlip_Rejection_Reason?: string | null;
+  Ring_Rejection_Reason?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Rejection reasons
+// ---------------------------------------------------------------------------
+// When a station rejects a part it writes the cause into
+// Circlip_Rejection_Reason / Ring_Rejection_Reason. Crucially it does NOT
+// always also set Circlip_Result='FAIL' — for reasons raised before the
+// inspection completes (recipe/barcode mismatch, abnormal part, groove
+// anodizing missing, already-processed) the Result column stays NULL. Those
+// parts stop dead at the station, but the old classifier only looked at
+// Circlip_Result and so reported them as IN_PROGRESS forever.
+//
+// "No rejection" is written three different ways by the line — NULL, 'NA'
+// and 'PASS' — so the rule is: a reason counts as a rejection unless it is
+// one of those sentinels.
+const REASON_SENTINELS = new Set(['NA', 'PASS']);
+
+// Commissioning/test strings that leaked into production data. They are not
+// real rejections, so they must not inflate the scrap counts. Kept as an
+// explicit list: anything NOT matched here still counts as a rejection, so a
+// genuinely new reason can never silently fall back to IN_PROGRESS.
+const REASON_TEST_VALUES = new Set(['R1', 'R2', 'R5', 'AB', 'TEST', 'TEST1', 'TEST4', 'SAM']);
+
+export function isRejectionReason(reason: string | null | undefined): boolean {
+  if (reason === null || reason === undefined) return false;
+  const v = reason.trim().toUpperCase();
+  if (v === '') return false;
+  return !REASON_SENTINELS.has(v) && !REASON_TEST_VALUES.has(v);
+}
+
+// "Did the circlip station reject this part?" across ALL rows of a DMC —
+// the reject may be recorded on row 0 while the latest row is a ring attempt.
+// Single source of truth for the several callers that used to hand-roll
+// `records.some(r => r.Circlip_Result === 'FAIL')` and so missed
+// reason-only rejections.
+export function hasCirclipRejection(
+  rows: Array<{ Circlip_Result: string | null; Circlip_Rejection_Reason?: string | null }>,
+): boolean {
+  return rows.some(
+    (r) => r.Circlip_Result === 'FAIL' || isRejectionReason(r.Circlip_Rejection_Reason),
+  );
+}
+
+// SQL twin of isRejectionReason(). `col` is a fully-qualified column
+// reference, e.g. 'l.Ring_Rejection_Reason'. Kept next to the TS version so
+// the two can't drift.
+export function rejectionReasonSql(col: string): string {
+  const excluded = [...REASON_SENTINELS, ...REASON_TEST_VALUES]
+    .map((v) => `'${v}'`)
+    .join(', ');
+  return `(${col} IS NOT NULL AND LTRIM(RTRIM(${col})) <> '' AND UPPER(LTRIM(RTRIM(${col}))) NOT IN (${excluded}))`;
 }
 
 // The PLC's Result column is the authoritative final verdict. If it says
@@ -49,13 +103,17 @@ export function classifyState(latest: SamLogRowForState, hasCirclipFail: boolean
   // Circlip_Result=FAIL recorded but Result=PASS and Unloading_Time set —
   // we treat it as PACKED.
   if (plcMarkedGood(latest)) return 'PACKED';
-  if (hasCirclipFail) return 'CIRCLIP_SCRAP';
+  // A circlip rejection reason is as final as Circlip_Result='FAIL' — the
+  // part is stopped at the station and never reaches the ring.
+  if (hasCirclipFail || isRejectionReason(latest.Circlip_Rejection_Reason)) return 'CIRCLIP_SCRAP';
   const ring = latest.Ring_Result;
   const unload = latest.Unloading_Time;
   const unloaded = unload !== null && unload !== '';
   if (ring === 'PASS' && unloaded) return 'PACKED';
   if (ring === 'PASS') return 'RING_OK';
-  if (ring === 'FAIL') return 'RING_NG';
+  // Same treatment on the ring side. Checked after the PASS branches so an
+  // explicit PASS always wins over a stale reason string.
+  if (ring === 'FAIL' || isRejectionReason(latest.Ring_Rejection_Reason)) return 'RING_NG';
   if (unloaded) return 'PACKED';
   return 'IN_PROGRESS';
 }
@@ -90,10 +148,10 @@ export function classifyDisplayState(
 // purposes the distinction doesn't matter.
 export const STATE_CASE_SQL = `CASE
   WHEN l.Result = 'PASS' AND l.Unloading_Time IS NOT NULL AND l.Unloading_Time <> '' THEN 'PACKED'
-  WHEN p.has_circlip_fail = 1 AND p.has_circlip_pass = 0 THEN 'CIRCLIP_SCRAP'
+  WHEN (p.has_circlip_fail = 1 OR p.has_circlip_reject = 1) AND p.has_circlip_pass = 0 THEN 'CIRCLIP_SCRAP'
   WHEN l.Ring_Result = 'PASS' AND l.Unloading_Time IS NOT NULL AND l.Unloading_Time <> '' THEN 'PACKED'
   WHEN l.Ring_Result = 'PASS' THEN 'RING_OK'
-  WHEN l.Ring_Result = 'FAIL' THEN 'RING_NG'
+  WHEN l.Ring_Result = 'FAIL' OR ${rejectionReasonSql('l.Ring_Rejection_Reason')} THEN 'RING_NG'
   WHEN l.Unloading_Time IS NOT NULL AND l.Unloading_Time <> '' THEN 'PACKED'
   ELSE 'IN_PROGRESS'
 END`;
@@ -277,6 +335,9 @@ export function buildLatestPerDmcCte(extraConditions: string[]): string {
       MAX(Ring_Count) AS max_ring_count,
       MAX(CASE WHEN Circlip_Result = 'FAIL' THEN 1 ELSE 0 END) AS has_circlip_fail,
       MAX(CASE WHEN Circlip_Result = 'PASS' THEN 1 ELSE 0 END) AS has_circlip_pass,
+      -- A circlip rejection reason on ANY row of the DMC stops the part at
+      -- the station even when Circlip_Result was never written.
+      MAX(CASE WHEN ${rejectionReasonSql('Circlip_Rejection_Reason')} THEN 1 ELSE 0 END) AS has_circlip_reject,
       MIN(Date_Time) AS first_seen,
       MAX(Date_Time) AS last_seen,
       MIN(CASE WHEN Circlip_Result = 'PASS' THEN Circlip_Time END) AS first_pass_circlip_time,
