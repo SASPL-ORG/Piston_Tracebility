@@ -19,11 +19,26 @@ const ImageGroupView = forwardRef<HTMLDivElement, ImageGroupViewProps>(function 
 ) {
   const [filter, setFilter] = useState<FilterMode>('all');
 
+  // Cap how many thumbnails render at once. Thumbs are generated lazily by the
+  // backend on first request (~135 ms each, vs ~60 ms once cached), so a
+  // re-inspected part with 500+ images used to fire 500 cold generations at
+  // page load -- ~13 s of spinner, and heavy sharp CPU contention. Rendering a
+  // page at a time keeps first paint fast; "Show all" stays one click away.
+  const PAGE_SIZE = 48;
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
   const filteredImages = useMemo(() => {
     if (filter === 'ok') return group.images.filter((i) => i.ok_flag === 0);
     if (filter === 'ng') return group.images.filter((i) => i.ok_flag === 1);
     return group.images;
   }, [filter, group.images]);
+
+  // Switching OK/NG/All changes the list, so start again from the first page.
+  const visibleImages = useMemo(
+    () => filteredImages.slice(0, visibleCount),
+    [filteredImages, visibleCount],
+  );
+  const hiddenCount = filteredImages.length - visibleImages.length;
 
   const okCount = group.images.filter((i) => i.ok_flag === 0).length;
   const ngCount = group.images.filter((i) => i.ok_flag === 1).length;
@@ -53,7 +68,10 @@ const ImageGroupView = forwardRef<HTMLDivElement, ImageGroupViewProps>(function 
           {(['all', 'ok', 'ng'] as FilterMode[]).map((mode) => (
             <button
               key={mode}
-              onClick={() => setFilter(mode)}
+              onClick={() => {
+                setFilter(mode);
+                setVisibleCount(PAGE_SIZE);
+              }}
               className={clsx(
                 'px-3 py-1 text-xs font-semibold transition-colors',
                 filter === mode
@@ -78,8 +96,9 @@ const ImageGroupView = forwardRef<HTMLDivElement, ImageGroupViewProps>(function 
             : `No ${filter.toUpperCase()} images in this group`}
         </div>
       ) : (
+        <>
         <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
-          {filteredImages.map((img, idx) => (
+          {visibleImages.map((img, idx) => (
             <button
               key={img.id}
               onClick={() => onImageClick(filteredImages, idx)}
@@ -107,6 +126,26 @@ const ImageGroupView = forwardRef<HTMLDivElement, ImageGroupViewProps>(function 
             </button>
           ))}
         </div>
+        {hiddenCount > 0 && (
+          <div className="mt-3 flex items-center justify-center gap-3">
+            <span className="text-xs text-gray-500">
+              Showing {visibleImages.length} of {filteredImages.length}
+            </span>
+            <button
+              onClick={() => setVisibleCount((n) => n + PAGE_SIZE)}
+              className="px-3 py-1.5 text-xs font-semibold rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              Show {Math.min(PAGE_SIZE, hiddenCount)} more
+            </button>
+            <button
+              onClick={() => setVisibleCount(filteredImages.length)}
+              className="px-3 py-1.5 text-xs font-semibold rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+            >
+              Show all {filteredImages.length}
+            </button>
+          </div>
+        )}
+        </>
       )}
     </div>
   );
