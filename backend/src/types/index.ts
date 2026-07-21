@@ -45,9 +45,18 @@ export interface ListFailureItem {
   rejection_reason: string | null;
 }
 
+// One row of the "why did these fail" summary shown above the drill-down
+// list. Sorted by count descending so the dominant cause is first.
+export interface FailureReasonBreakdownItem {
+  reason: string;
+  count: number;
+  pct: number;
+}
+
 export interface ListFailuresResponse {
   type: 'circlip' | 'ring';
   count: number;
+  reason_breakdown: FailureReasonBreakdownItem[];
   truncated?: boolean;
   filters_applied: {
     from: string | null;

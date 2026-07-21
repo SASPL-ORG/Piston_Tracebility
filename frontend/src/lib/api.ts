@@ -50,9 +50,16 @@ export interface ListFailureItem {
   rejection_reason: string | null;
 }
 
+export interface FailureReasonBreakdownItem {
+  reason: string;
+  count: number;
+  pct: number;
+}
+
 export interface ListFailuresResponse {
   type: 'circlip' | 'ring';
   count: number;
+  reason_breakdown: FailureReasonBreakdownItem[];
   truncated?: boolean;
   filters_applied: {
     from: string | null;

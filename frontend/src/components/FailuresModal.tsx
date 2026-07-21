@@ -146,6 +146,34 @@ export default function FailuresModal({
             </div>
           )}
 
+          {/* Why did these fail — per-reason summary above the part list, so
+              the dominant cause is visible without reading every row. */}
+          {!loading && !error && data && data.reason_breakdown?.length > 0 && (
+            <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
+              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                Rejection reasons
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {data.reason_breakdown.map((r) => (
+                  <span
+                    key={r.reason}
+                    title={`${r.count} of ${data.count} parts (${r.pct}%)`}
+                    className={
+                      'inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-xs font-semibold border ' +
+                      (r.reason === 'Not recorded'
+                        ? 'bg-slate-100 text-slate-600 border-slate-300'
+                        : 'bg-red-50 text-red-700 border-red-200')
+                    }
+                  >
+                    {r.reason}
+                    <span className="tabular-nums font-bold">{r.count}</span>
+                    <span className="text-[10px] font-normal opacity-70">{r.pct}%</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
           {!loading && !error && data && data.items.length > 0 && (
             <table className="w-full text-sm">
               <thead className="bg-gray-50 sticky top-0">

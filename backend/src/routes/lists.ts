@@ -6,6 +6,8 @@ import {
   STATE_CASE_SQL,
   STATE_CASE_SQL_DISPLAY,
   PACKED_LOG_JOIN_SQL,
+  rejectionReasonSql,
+  isRejectionReason,
 } from '../db/state.js';
 import { cacheReads } from '../utils/responseCache.js';
 import { serializeDateTimeFields } from '../db/datetime.js';
@@ -562,7 +564,12 @@ export default async function listRoutes(app: FastifyInstance) {
       // Event-level: every row with Circlip_Result='FAIL' inside the
       // window. No latest-per-DMC dedup — a part with two snap-ring
       // failures pre-reinspection produces two rows.
-      const where = [...conds, "Circlip_Result = 'FAIL'", timeWhereRaw].join(' AND ');
+      // A reason on its own is a rejection: for causes raised before the
+      // inspection completes the PLC writes Circlip_Rejection_Reason and
+      // leaves Circlip_Result NULL. Filtering on Result='FAIL' alone hid
+      // those parts from this drill-down entirely.
+      const circlipReject = `(Circlip_Result = 'FAIL' OR ${rejectionReasonSql('Circlip_Rejection_Reason')})`;
+      const where = [...conds, circlipReject, timeWhereRaw].join(' AND ');
       const r = await request.query(`
         SELECT TOP (${ROW_CAP + 1})
           Date_Time, Plant_Id, DMC, Circlip_Rejection_Reason AS rejection_reason
@@ -583,7 +590,7 @@ export default async function listRoutes(app: FastifyInstance) {
           l.Date_Time, l.Plant_Id, l.DMC, l.Ring_Rejection_Reason AS rejection_reason
         FROM latest l
         INNER JOIN per_dmc p ON p.DMC = l.DMC
-        WHERE l.Ring_Result = 'FAIL'
+        WHERE (l.Ring_Result = 'FAIL' OR ${rejectionReasonSql('l.Ring_Rejection_Reason')})
           AND ${timeWhereOnL}
         ORDER BY l.Date_Time DESC
       `);
@@ -602,9 +609,29 @@ export default async function listRoutes(app: FastifyInstance) {
       rejection_reason: row.rejection_reason ?? null,
     }));
 
+    // Per-reason summary. Rows whose reason is missing or a "no rejection"
+    // sentinel are bucketed as "Not recorded" rather than dropped, so the
+    // breakdown always sums to the row count and a gap in PLC reporting is
+    // visible instead of silently disappearing.
+    const reasonCounts = new Map<string, number>();
+    for (const it of items) {
+      const key = isRejectionReason(it.rejection_reason)
+        ? it.rejection_reason!.trim()
+        : 'Not recorded';
+      reasonCounts.set(key, (reasonCounts.get(key) ?? 0) + 1);
+    }
+    const reason_breakdown = [...reasonCounts.entries()]
+      .map(([reason, count]) => ({
+        reason,
+        count,
+        pct: items.length ? Math.round((count / items.length) * 1000) / 10 : 0,
+      }))
+      .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason));
+
     const response: ListFailuresResponse = {
       type,
       count: items.length,
+      reason_breakdown,
       ...(truncated ? { truncated: true } : {}),
       filters_applied: {
         from: req.query.from ?? null,
