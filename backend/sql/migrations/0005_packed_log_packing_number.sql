@@ -8,6 +8,16 @@
 -- in SSMS as a login that has ALTER on the SAM database (e.g. sa).
 -- Idempotent: re-running is safe.
 
+-- The filtered index below (WHERE Packing_Number IS NOT NULL) requires
+-- QUOTED_IDENTIFIER ON. SSMS connects with it ON, but sqlcmd connects with it
+-- OFF, so running this from sqlcmd failed with:
+--   Msg 1934 - CREATE INDEX failed because the following SET options have
+--   incorrect settings: 'QUOTED_IDENTIFIER'.
+-- Set both options explicitly so the script behaves identically either way.
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+GO
+
 IF NOT EXISTS (
   SELECT 1 FROM sys.columns
   WHERE Name = 'Packing_Number' AND Object_ID = OBJECT_ID('dbo.Packed_Log_TEST')
