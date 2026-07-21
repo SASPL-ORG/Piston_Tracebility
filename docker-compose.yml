@@ -93,7 +93,12 @@ services:
     # `start_period` lets the SQL connect loop run for a full minute
     # before Docker counts a failure.
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O-", "http://localhost:3000/health"]
+      # Use 127.0.0.1, NOT localhost. Inside the container /etc/hosts maps
+      # localhost to both 127.0.0.1 and ::1, wget tries the IPv6 ::1 first,
+      # and Fastify binds IPv4 only -> "connection refused" on every probe.
+      # With localhost this healthcheck never passed once (FailingStreak 72),
+      # silently defeating the self-heal restart it exists to trigger.
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:3000/health"]
       interval: 30s
       timeout: 5s
       retries: 3
