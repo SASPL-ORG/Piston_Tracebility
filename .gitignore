@@ -31,3 +31,6 @@ Thumbs.db
 
 # Release packaging
 release-files/
+
+# local verification stack env (contains real admin creds)
+.env.test

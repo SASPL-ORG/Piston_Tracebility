@@ -16,6 +16,12 @@ BEGIN
   ALTER TABLE dbo.Packed_Log_TEST
   ADD Packing_Number NVARCHAR(20) NULL;
 END;
+GO
+-- ^^ REQUIRED batch separator. SQL Server compiles an entire batch before it
+-- executes any of it, so without this GO the CREATE INDEX below fails to
+-- compile with "Invalid column name 'Packing_Number'" (the ALTER above hasn't
+-- run yet at compile time) and the WHOLE batch aborts -- meaning the column
+-- never gets added either. Splitting into batches fixes the chicken-and-egg.
 
 IF NOT EXISTS (
   SELECT 1 FROM sys.indexes

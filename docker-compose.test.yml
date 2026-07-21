@@ -1,0 +1,81 @@
+# Parallel VERIFICATION stack for the recovered upgrade build.
+#
+# Deliberately isolated from the live stack:
+#   - distinct container names  (no clash with traceability-*)
+#   - nginx on 8081             (live app keeps 8080)
+#   - image folders point at D:/PistonTest/*  so this stack's watcher can
+#     NEVER move or index the real CV-X output that the live stack owns.
+#
+# Run with:  docker compose -p piston_test -f docker-compose.test.yml --env-file .env.test up -d --build
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: piston-test-backend
+    environment:
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT:-1433}
+      - DB_NAME=${DB_NAME:-SAM}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_TRUST_SERVER_CERTIFICATE=${DB_TRUST_SERVER_CERTIFICATE:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - NODE_ENV=production
+      - TZ=${TZ:-Asia/Kolkata}
+      - IMAGE_MATCH_PRE_TOLERANCE_SECONDS=${IMAGE_MATCH_PRE_TOLERANCE_SECONDS:-900}
+      - IMAGE_MATCH_TOLERANCE_SECONDS=${IMAGE_MATCH_TOLERANCE_SECONDS:-900}
+      - IMAGE_SCAN_INTERVAL_MS=${IMAGE_SCAN_INTERVAL_MS:-5000}
+      - IMAGE_WORKER_COUNT=${IMAGE_WORKER_COUNT:-4}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      # Webhook intentionally blank on the test stack: no PLC stop signals
+      # should ever be fired from a verification build.
+      - NODE_RED_TOOL_LIFE_WEBHOOK_URL=
+      - NODE_RED_WEBHOOK_TOKEN=
+      - ALARM_EXCLUDE=${ALARM_EXCLUDE:-}
+    volumes:
+      - ./data/test-exports:/data/exports
+      - ./data/test-logs:/data/logs
+      - ./data/license:/data/license
+      # ISOLATED — not the live CV-X folders.
+      - "D:/PistonTest/incoming:/data/incoming"
+      - "D:/PistonTest/images:/data/images"
+    networks:
+      - piston-test-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  ui:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: piston-test-ui
+    networks:
+      - piston-test-network
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+  nginx:
+    image: nginx:alpine
+    container_name: piston-test-nginx
+    ports:
+      - "8081:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+    networks:
+      - piston-test-network
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - ui
+
+networks:
+  piston-test-network:
+    driver: bridge
