@@ -59,3 +59,53 @@ export async function moveFileToDestination(args: {
   }
   return destPath;
 }
+
+// Master-piece variant of moveFileToDestination. Different on-disk layout
+// so master captures stay visually distinct from production parts under
+// D:\Records Actual:
+//
+//   <output>/<DMC>/MASTER/<CIRCLIP|RING>/<session>/<OK|NG>/<basename>
+//
+// No attempt_N folder — masters don't have inspection attempts in the
+// production sense; the operator runs them through CV-X repeatedly and
+// each CV-X session is its own bucket on the page.
+export async function moveMasterFileToDestination(args: {
+  sourcePath: string;
+  fullDmc: string;
+  inspectionType: 'CIRCLIP' | 'RING';
+  sessionFolder: string;
+  okFlag: 0 | 1;
+}): Promise<string> {
+  const cfg = getImageConfig();
+  const okLabel = args.okFlag === 0 ? 'OK' : 'NG';
+
+  const destDir = path.join(
+    cfg.outputPath,
+    sanitizeForWindowsFs(args.fullDmc),
+    'MASTER',
+    args.inspectionType,
+    sanitizeForWindowsFs(args.sessionFolder || '__no_session__'),
+    okLabel,
+  );
+  await fs.mkdir(destDir, { recursive: true });
+
+  const destPath = path.join(destDir, path.basename(args.sourcePath));
+
+  if (cfg.fileHandling === 'copy') {
+    await fs.copyFile(args.sourcePath, destPath);
+    return destPath;
+  }
+
+  try {
+    await fs.rename(args.sourcePath, destPath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EXDEV' || code === 'EPERM') {
+      await fs.copyFile(args.sourcePath, destPath);
+      await fs.unlink(args.sourcePath);
+    } else {
+      throw err;
+    }
+  }
+  return destPath;
+}

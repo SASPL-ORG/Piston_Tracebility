@@ -20,11 +20,12 @@ const SHIFT_OPTIONS: { value: ShiftScope; label: string }[] = [
 ];
 
 const STATE_COLORS: Record<PartState, string> = {
-  PACKED: '#10b981', // green
-  RING_OK: '#14b8a6', // teal
-  IN_PROGRESS: '#f59e0b', // amber
-  RING_NG: '#ef4444', // red
-  CIRCLIP_SCRAP: '#b91c1c', // deeper red
+  PACKED: '#059669',       // deeper green — Zebra-packed
+  COMPLETED: '#34d399',    // lighter green — line-finished, not yet packed
+  RING_OK: '#14b8a6',      // teal
+  IN_PROGRESS: '#f59e0b',  // amber
+  RING_NG: '#ef4444',      // red
+  CIRCLIP_SCRAP: '#b91c1c',// deeper red
 };
 
 function formatBucketTick(value: string, granularity: ProductionGranularity): string {
@@ -55,6 +56,19 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // Background refresh — same call as `loadData` but doesn't toggle the
+  // page-level "loading" spinner. The Dashboard is meant to feel live;
+  // we don't want the visible state to flicker every 30 s.
+  const loadDataSilent = useCallback(async () => {
+    try {
+      const result = await fetchDashboard(from, to, { shift });
+      setData(result);
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load dashboard');
+    }
+  }, [from, to, shift]);
+
   const loadData = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -71,6 +85,22 @@ export default function Dashboard() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Auto-refresh every 30 s — Dashboard only. Skips when the tab is
+  // backgrounded so we don't burn cycles for an unseen view, and skips
+  // when a foreground load is already in flight. Only Dashboard does
+  // this; Lists / Part Trace / Images intentionally do NOT auto-refresh
+  // so they don't disrupt the operator's filter selections mid-task.
+  const AUTO_REFRESH_MS = 30_000;
+  useEffect(() => {
+    const tick = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (loading) return;
+      void loadDataSilent();
+    };
+    const id = window.setInterval(tick, AUTO_REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [loadDataSilent, loading]);
 
   const handleDateChange = (newFrom: string, newTo: string) => {
     setFrom(newFrom);
@@ -92,14 +122,17 @@ export default function Dashboard() {
           <div className="w-1 h-8 bg-blue-600 rounded-full" />
           <h1 className="text-2xl font-bold text-gray-900">Production Dashboard</h1>
         </div>
-        <button
-          onClick={loadData}
-          disabled={loading}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
-        >
-          <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-gray-400 hidden sm:inline">Auto-refreshing every 30s</span>
+          <button
+            onClick={loadData}
+            disabled={loading}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Filters — date range + shift scope. Shift filter composes with
@@ -141,13 +174,14 @@ export default function Dashboard() {
 
       {/* KPI Cards */}
       {data && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-7 gap-4 auto-rows-fr">
+        <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 gap-4 auto-rows-fr">
           <KpiCard title="Total Parts" value={data.kpis.total.toLocaleString()} icon={Package} color="blue" subtitle="Distinct parts" />
-          <KpiCard title="Passed" value={data.kpis.passed.toLocaleString()} icon={CheckCircle} color="green" subtitle="Packed + Ring OK" />
-          <KpiCard title="Circlip Fail" value={data.kpis.circlip_fail.toLocaleString()} icon={XCircle} color="red" subtitle="Scrapped" />
-          <KpiCard title="Ring Fail" value={data.kpis.ring_fail.toLocaleString()} icon={AlertTriangle} color="amber" subtitle="Ring rejected" />
+          <KpiCard title="Passed" value={data.kpis.passed.toLocaleString()} icon={CheckCircle} color="green" subtitle="Final OK" />
+          <KpiCard title="Snap Ring Fail" value={data.kpis.circlip_fail.toLocaleString()} icon={XCircle} color="red" subtitle="Final fail (not saved)" />
+          <KpiCard title="Ring Fail" value={data.kpis.ring_fail.toLocaleString()} icon={AlertTriangle} color="amber" subtitle="Final fail (not saved)" />
           <KpiCard title="In Progress" value={data.kpis.in_progress.toLocaleString()} icon={Clock} color="purple" subtitle="Ring not yet recorded" />
-          <KpiCard title="Reinspected" value={data.kpis.reinspected.toLocaleString()} icon={RotateCw} color="indigo" subtitle="Multi-attempt parts" />
+          <KpiCard title="Snap Ring Re-inspection" value={data.kpis.circlip_reinspected.toLocaleString()} icon={RotateCw} color="indigo" subtitle="Saved by re-inspection" />
+          <KpiCard title="Ring Re-inspection" value={data.kpis.ring_reinspected.toLocaleString()} icon={RotateCw} color="indigo" subtitle="Saved by re-inspection" />
           <KpiCard title="Pass Rate" value={`${data.kpis.pass_rate}%`} icon={Percent} color="slate" subtitle="Overall yield" />
         </div>
       )}
@@ -158,7 +192,7 @@ export default function Dashboard() {
           {/* Production breakdown — adaptive bucketing, three colors */}
           <div className="lg:col-span-2 bg-white rounded-xl border border-gray-200 shadow-sm p-5">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-base font-semibold text-gray-800">Production Breakdown</h3>
+              <h3 className="text-base font-semibold text-gray-800">Production Summary</h3>
               <span className="text-xs text-gray-400">{granularityLabel(data.granularity)}</span>
             </div>
             {data.production_breakdown.length > 0 ? (

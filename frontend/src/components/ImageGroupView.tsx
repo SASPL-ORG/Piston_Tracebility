@@ -1,17 +1,20 @@
 import { useState, useMemo, forwardRef } from 'react';
 import { AlertCircle } from 'lucide-react';
 import clsx from 'clsx';
-import { ImageGroup, ImageItem, imageSrc, groupTitle } from '../lib/api';
+import { ImageGroup, ImageItem, imageThumbSrc, groupTitle } from '../lib/api';
 
 type FilterMode = 'all' | 'ok' | 'ng';
 
 interface ImageGroupViewProps {
   group: ImageGroup;
   onImageClick: (images: ImageItem[], index: number) => void;
+  // Master Data inspection pages render "Attempt N — HH:MM:SS" instead of
+  // the default "Circlip Inspection" / "Ring Attempt N" — pass that here.
+  titleOverride?: string;
 }
 
 const ImageGroupView = forwardRef<HTMLDivElement, ImageGroupViewProps>(function ImageGroupView(
-  { group, onImageClick },
+  { group, onImageClick, titleOverride },
   ref,
 ) {
   const [filter, setFilter] = useState<FilterMode>('all');
@@ -30,7 +33,7 @@ const ImageGroupView = forwardRef<HTMLDivElement, ImageGroupViewProps>(function 
     <div ref={ref} className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <div className="w-1 h-6 bg-blue-600 rounded-full" />
-        <h3 className="text-base font-semibold text-gray-800">{groupTitle(group)}</h3>
+        <h3 className="text-base font-semibold text-gray-800">{titleOverride ?? groupTitle(group)}</h3>
         <span className="text-sm text-gray-500">
           {group.indexed} / {group.expected}
         </span>
@@ -84,9 +87,10 @@ const ImageGroupView = forwardRef<HTMLDivElement, ImageGroupViewProps>(function 
               title={`Picture ${img.picture_no}`}
             >
               <img
-                src={imageSrc(img.id)}
+                src={imageThumbSrc(img.id)}
                 alt={`Picture ${img.picture_no}`}
                 loading="lazy"
+                decoding="async"
                 className="w-full h-full object-cover group-hover:opacity-90 transition-opacity"
               />
               <div

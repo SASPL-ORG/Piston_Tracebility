@@ -1,9 +1,10 @@
 import { parseImagePath, ParsedImage } from './parser.js';
 import { matchToSamLog } from './matcher.js';
-import { moveFileToDestination } from './mover.js';
+import { moveFileToDestination, moveMasterFileToDestination } from './mover.js';
 import { logAlarm } from './alarms.js';
 import {
   findExistingByCounter,
+  findMasterByDmc,
   insertImageRow,
   nextPictureNo,
 } from './db.js';
@@ -18,15 +19,41 @@ export async function indexImage(filePath: string): Promise<void> {
     return;
   }
 
-  // Dedup: have we seen this CV-X frame before? (counter, camera, DMC)
-  // tuple — counter alone collides across CV-X counter resets.
+  // Dedup: have we seen this CV-X frame before? Keyed on
+  // (session_folder, counter, camera, DMC) — counter resets per session
+  // burst, so a multi-attempt part has the same (counter, camera, DMC)
+  // in two different sessions. session_folder breaks the tie.
   const existing = await findExistingByCounter(
     parsed.sourceCounter,
     parsed.cameraId,
     parsed.fullDmc,
+    parsed.sessionFolder,
   );
   if (existing) {
     // The retry job handles pending → resolved transitions. Just leave it.
+    return;
+  }
+
+  // Master-piece bypass — masters never pass through the loading station,
+  // so they're never in SAM_Log; the ±15-min matchToSamLog window would
+  // always fail and quarantine the file. Look up dbo.Master_Data FIRST;
+  // if this DMC is on the master catalog, route to indexMaster and skip
+  // matchToSamLog entirely.
+  const master = await findMasterByDmc(parsed.fullDmc);
+  if (master) {
+    if (master.inspection_type !== parsed.inspectionType) {
+      // Camera/master mismatch is a soft warning (logAlarm) — we still
+      // accept the file because the camera mapping is the authoritative
+      // signal for inspection_type. Operator may have run a snap-ring
+      // master through the ring camera by mistake; we'd rather index
+      // it than throw it on the floor.
+      await logAlarm('MASTER_CAMERA_MISMATCH', parsed.fullDmc, 'IMAGE', {
+        expected: master.inspection_type,
+        got: parsed.inspectionType,
+        filePath: parsed.filePath,
+      });
+    }
+    await indexMaster(parsed);
     return;
   }
 
@@ -108,4 +135,57 @@ export async function indexResolved(
     pending: false,
   });
   return { pictureNo, destPath };
+}
+
+// Master-piece flow: move into the MASTER/<inspection>/<session>/<OK|NG>/
+// subtree under <output>/<DMC>, then insert a row with is_master=1 and
+// pending_match=0. ring_count stays NULL (masters don't have ring attempts);
+// picture_no is set to the source counter so per-session ordering on the
+// page is stable across re-indexes.
+export async function indexMaster(
+  parsed: Pick<
+    ParsedImage,
+    | 'fullDmc'
+    | 'inspectionType'
+    | 'okFlag'
+    | 'capturedAt'
+    | 'cameraId'
+    | 'sourceCounter'
+    | 'sessionFolder'
+    | 'filePath'
+  >,
+): Promise<{ destPath: string }> {
+  const destPath = await moveMasterFileToDestination({
+    sourcePath: parsed.filePath,
+    fullDmc: parsed.fullDmc,
+    inspectionType: parsed.inspectionType,
+    sessionFolder: parsed.sessionFolder,
+    okFlag: parsed.okFlag,
+  });
+
+  await insertImageRow({
+    dmc: parsed.fullDmc,
+    inspectionType: parsed.inspectionType,
+    ringCount: null,
+    pictureNo: parsed.sourceCounter,
+    filePath: destPath,
+    capturedAt: parsed.capturedAt,
+    okFlag: parsed.okFlag,
+    cameraId: parsed.cameraId,
+    sourceCounter: parsed.sourceCounter,
+    sessionFolder: parsed.sessionFolder,
+    pending: false,
+    isMaster: true,
+  });
+
+  // Visible in `docker logs traceability-backend` alongside the existing
+  // [images] scan/processor lines so the operator can confirm masters
+  // are landing through this branch and not getting quarantined.
+  // eslint-disable-next-line no-console
+  console.log(
+    `[images] indexed master capture dmc='${parsed.fullDmc}' type=${parsed.inspectionType} ` +
+      `session=${parsed.sessionFolder} ok=${parsed.okFlag === 0 ? 'OK' : 'NG'}`,
+  );
+
+  return { destPath };
 }

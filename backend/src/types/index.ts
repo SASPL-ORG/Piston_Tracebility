@@ -15,11 +15,47 @@ export interface SamLogRecord {
   Result: string | null;
 }
 
-// One row per DMC: the latest row plus per-DMC aggregates and classified state.
+// One row per DMC: the latest row plus per-DMC aggregates and classified
+// state. The rejection-reason columns (NR-stamped on rising edge events:
+// 'PASS', 'Recipe mismatch', 'Groove anodizing missing', 'Abnormal part',
+// 'Already processed' — pre-migration rows are NULL) are surfaced
+// snake_case for downstream consumers; the raw PLC column names stay
+// internal to SQL.
 export interface PartListItem extends SamLogRecord {
   state: PartState;
   reinspected: boolean;
   total_attempts: number;
+  circlip_rejection_reason: string | null;
+  ring_rejection_reason: string | null;
+  // Image counts sourced from dbo.Image_Index (matched rows only, all
+  // attempts). circlip_image_count counts CIRCLIP captures; ring counts
+  // every RING capture across all attempts. Zero when CV-X either did
+  // not capture or the indexer failed to match — useful for spotting
+  // inspections that ran but produced no images.
+  circlip_image_count: number;
+  ring_image_count: number;
+}
+
+// Single failure row in the /lists/failures response.
+export interface ListFailureItem {
+  s_no: number;
+  date_time: string | null;
+  plant_id: string | null;
+  dmc: string | null;
+  rejection_reason: string | null;
+}
+
+export interface ListFailuresResponse {
+  type: 'circlip' | 'ring';
+  count: number;
+  truncated?: boolean;
+  filters_applied: {
+    from: string | null;
+    to: string | null;
+    shift: 'A' | 'B' | 'C' | 'all';
+    plant: string;
+  };
+  items: ListFailureItem[];
 }
 
 export interface DashboardKpis {
@@ -28,7 +64,8 @@ export interface DashboardKpis {
   circlip_fail: number;
   ring_fail: number;
   in_progress: number;
-  reinspected: number;
+  circlip_reinspected: number;
+  ring_reinspected: number;
   pass_rate: number;
 }
 
@@ -55,6 +92,27 @@ export interface DashboardResponse {
   state_breakdown: StateBreakdownItem[];
 }
 
+// One (bucket, part_code) cell in the Lists-page Production Summary
+// matrix. Bucket is the KPI category from the dashboard's partitioning;
+// part_code is the 4-char variant id (M100, MZA0, ...).
+export type ListSummaryBucket =
+  | 'passed'
+  | 'circlip_fail'
+  | 'ring_fail'
+  | 'in_progress'
+  | 'circlip_reinspected'
+  | 'ring_reinspected';
+
+export interface ListSummaryEntry {
+  bucket: string;
+  part_code: string;
+  count: number;
+}
+
+export interface ListSummaryResponse {
+  entries: ListSummaryEntry[];
+}
+
 export interface PaginatedResponse<T> {
   data: T[];
   total: number;
@@ -68,6 +126,9 @@ export type ListType =
   | 'passed'
   | 'circlip_scrap'
   | 'ring_rejected'
+  // Union of snap-ring and ring re-inspection — the dropdown shows a
+  // single "Re-Inspection" entry; the two sub-buckets are no longer
+  // separately selectable from the UI.
   | 'reinspected'
   | 'in_progress'
   | 'packed';
@@ -101,12 +162,45 @@ export interface AlarmEvent {
   status: AlarmStatus;
 }
 
+// One row in the global Alarms list. Same fields as the per-part
+// AlarmEvent but with the BatchID included (the per-part panel hides it
+// because the DMC is already in the page header).
+export interface AlarmListItem {
+  id: number;
+  logTime: string | null;
+  batchId: string | null;
+  alarm: string;
+  status: AlarmStatus;
+}
+
+// Event Timeline — the 13-station journey of a part through the line.
+// Built from the SAM_Log rows for the DMC plus deterministic visibility
+// rules (event_timeline_brief.md). 4 of the events are real PLC
+// checkpoints (3, 7, 13, 15); the rest are deterministic intermediate
+// stations rendered by name when the part progressed past them.
+export type EventTimelineStepType = 'checkpoint' | 'intermediate' | 'conditional';
+export type EventTimelineStepStatus = 'OK' | 'FAIL' | 'COMPLETED';
+
+export interface EventTimelineStep {
+  step: number;
+  label: string;
+  type: EventTimelineStepType;
+  timestamp?: string | null;
+  status?: EventTimelineStepStatus;
+  reason?: string | null;
+  // Event 13 only — total ring inspection attempts (latest row's Ring_Count).
+  attempts?: number;
+  // Event 10 only — the 5 ring-assembly sub-stations listed under it.
+  substations?: string[];
+}
+
 export interface PartTraceResponse {
   dmc: string;
   total_records: number;
   records: SamLogRecord[];
   summary: PartTraceSummary;
   alarms: AlarmEvent[];
+  event_timeline: EventTimelineStep[];
 }
 
 export interface ImageItem {

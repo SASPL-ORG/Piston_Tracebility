@@ -15,10 +15,16 @@ let retryRunning = false;
 let retentionRunning = false;
 
 export async function startImageSubsystem(log: Logger): Promise<void> {
+  // The image processor owns its own scan loop, worker pool, and watchdog —
+  // see backend/src/images/watcher.ts for the architecture rationale.
   await startImageWatcher((m) => log.info(m));
 
-  // Pending-queue retry: every minute. Re-entrancy guarded.
-  retryJob = cron.schedule('* * * * *', async () => {
+  // Pending-queue retry: every 10 seconds (6-field cron). Re-entrancy
+  // guarded. Resolves rows that were inserted as PENDING because the
+  // SAM_Log row hadn't appeared yet — at 10-sec cadence a circlip image
+  // whose PLC row arrives within ~60 sec is resolved well before the
+  // operator notices.
+  retryJob = cron.schedule('*/10 * * * * *', async () => {
     if (retryRunning) return;
     retryRunning = true;
     try {

@@ -2,6 +2,28 @@
 // dependency is visible at the call site.
 import { getPool } from '../db/connection.js';
 
+// Looks the parsed DMC up in dbo.Master_Data — if found, the file is a
+// master-piece capture and the matcher should bypass the SAM_Log lookup
+// entirely (masters never go through the loading station, so they're
+// never in SAM_Log). Returns null for production parts (the common path).
+export interface MasterDataRow {
+  id: number;
+  inspection_type: 'CIRCLIP' | 'RING';
+}
+
+export async function findMasterByDmc(dmc: string): Promise<MasterDataRow | null> {
+  const pool = await getPool();
+  const r = await pool
+    .request()
+    .input('dmc', dmc)
+    .query(`
+      SELECT TOP 1 id, inspection_type
+      FROM dbo.Master_Data
+      WHERE dmc = @dmc AND active = 1
+    `);
+  return r.recordset[0] ?? null;
+}
+
 export interface ExistingImageRow {
   id: number;
   pending_match: number;
@@ -24,15 +46,19 @@ export interface PendingImageRow {
   session_folder: string | null;
 }
 
-// Has this CV-X frame been indexed already? Keyed on the global counter +
-// camera + DMC. The counter alone isn't enough: CV-X resets it on machine
-// restart / storage clear, so a fresh counter=27 from today would collide
-// with last week's counter=27 for a different part. Adding DMC makes the
-// triple uniquely identify one image.
+// Has this CV-X frame been indexed already? Keyed on
+// (session_folder, counter, camera, DMC). The counter alone isn't enough:
+// CV-X resets it on machine restart and ALSO on every new session burst,
+// which means for a multi-attempt part the same (counter, camera, DMC)
+// triple appears in both attempt 1 (session A) and attempt 2 (session B).
+// Adding session_folder distinguishes them and keeps the function
+// idempotent against the same source file (it lives in exactly one
+// session folder).
 export async function findExistingByCounter(
   sourceCounter: number,
   cameraId: string,
   dmc: string,
+  sessionFolder: string,
 ): Promise<ExistingImageRow | null> {
   const pool = await getPool();
   const result = await pool
@@ -40,10 +66,14 @@ export async function findExistingByCounter(
     .input('counter', sourceCounter)
     .input('cam', cameraId)
     .input('dmc', dmc)
+    .input('session', sessionFolder)
     .query(`
       SELECT TOP 1 id, pending_match, file_path, ring_count, picture_no
-      FROM dbo.Image_Index
-      WHERE source_counter = @counter AND camera_id = @cam AND DMC = @dmc
+      FROM dbo.Image_Index WITH (NOLOCK)
+      WHERE source_counter = @counter
+        AND camera_id = @cam
+        AND DMC = @dmc
+        AND session_folder = @session
       ORDER BY id ASC
     `);
   return result.recordset[0] ?? null;
@@ -65,7 +95,7 @@ export async function nextPictureNo(
   }
   const result = await req.query(`
     SELECT ISNULL(MAX(picture_no), 0) + 1 AS next_no
-    FROM dbo.Image_Index
+    FROM dbo.Image_Index WITH (NOLOCK)
     WHERE DMC = @dmc
       AND inspection_type = @type
       AND ((ring_count = @rc) OR (ring_count IS NULL AND @rc IS NULL))
@@ -86,6 +116,12 @@ export interface InsertRowArgs {
   sourceCounter: number;
   sessionFolder: string;
   pending: boolean;
+  // True when the row represents a master-piece capture. Indexed
+  // separately via IX_Image_Index_master_lookup; the Master Data page
+  // filters by is_master = 1 so production parts never bleed in. The
+  // column was added in migration 0003 with DEFAULT 0, so omitting it
+  // here from the existing call sites keeps the historical behaviour.
+  isMaster?: boolean;
 }
 
 export async function insertImageRow(args: InsertRowArgs): Promise<number> {
@@ -103,17 +139,18 @@ export async function insertImageRow(args: InsertRowArgs): Promise<number> {
     .input('counter', args.sourceCounter)
     .input('session', args.sessionFolder)
     .input('pending', args.pending ? 1 : 0)
+    .input('isMaster', args.isMaster ? 1 : 0)
     .query(`
       INSERT INTO dbo.Image_Index (
         DMC, inspection_type, ring_count, picture_no, file_path,
         captured_at, ok_flag, camera_id, source_counter, session_folder,
-        pending_match, indexed_at
+        pending_match, indexed_at, is_master
       )
       OUTPUT INSERTED.id
       VALUES (
         @dmc, @type, @rc, @pno, @path,
         @cap, @ok, @cam, @counter, @session,
-        @pending, SYSDATETIME()
+        @pending, SYSDATETIME(), @isMaster
       )
     `);
   return result.recordset[0].id;
@@ -144,7 +181,7 @@ export async function findPendingImages(): Promise<PendingImageRow[]> {
   const result = await pool.request().query(`
     SELECT id, DMC, inspection_type, captured_at, source_counter, file_path,
            camera_id, ok_flag, session_folder
-    FROM dbo.Image_Index
+    FROM dbo.Image_Index WITH (NOLOCK)
     WHERE pending_match = 1
     ORDER BY captured_at ASC
   `);
@@ -163,7 +200,7 @@ export async function findExpiredImages(retentionDays: number): Promise<Retentio
     .input('days', retentionDays)
     .query(`
       SELECT id, file_path
-      FROM dbo.Image_Index
+      FROM dbo.Image_Index WITH (NOLOCK)
       WHERE captured_at < DATEADD(day, -@days, SYSDATETIME())
     `);
   return result.recordset;

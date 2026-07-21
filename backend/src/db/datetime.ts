@@ -45,3 +45,46 @@ export function serializeDateTimeFields<T extends Record<string, unknown>>(
   }
   return rows;
 }
+
+// The PLC writes Circlip_Time / Ring_Time / Unloading_Time into nvarchar
+// columns as bare wall-clock strings ('YYYY-MM-DD HH:mm:ss', SCADA-box local
+// time, no offset). Unlike the `datetime`-typed Date_Time column, the mssql
+// driver hands these back as plain strings — so serializeDateTime passes them
+// through untouched and they reach the client in a *different* shape than
+// Date_Time (space separator, no timezone). This re-tags such a string with
+// the host's UTC offset and a 'T' separator so every timestamp the API emits
+// shares one contract (YYYY-MM-DDTHH:mm:ss±ZZ:ZZ), parseable by the frontend's
+// formatDateTime. Values that are null/empty, or already carry a 'T'/offset,
+// are returned unchanged. Assumes a no-DST host (true for Asia/Kolkata).
+const WALL_CLOCK_RE = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(\.\d{1,3})?$/;
+
+export function serializeWallClockString(
+  value: string | null | undefined,
+): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  // Already ISO-with-offset (e.g. a Date_Time that was serialized upstream)?
+  // Leave it alone.
+  if (/T.*[+-]\d{2}:\d{2}$/.test(value) || value.endsWith('Z')) return value;
+  const m = WALL_CLOCK_RE.exec(value.trim());
+  if (!m) return value; // unrecognized shape — don't mangle it
+  const [, yyyy, mo, dd, hh, mi, ss, frac] = m;
+  const ms = frac ? frac.slice(1).padEnd(3, '0') : '000';
+  return `${yyyy}-${mo}-${dd}T${hh}:${mi}:${ss}.${ms}${offsetSuffix(new Date())}`;
+}
+
+// Walk a recordset and rewrite nvarchar wall-clock timestamp fields in place
+// (Circlip_Time, Ring_Time, Unloading_Time) to the IST ISO contract.
+export function serializeWallClockFields<T extends Record<string, unknown>>(
+  rows: T[],
+  fields: (keyof T)[],
+): T[] {
+  for (const row of rows) {
+    for (const field of fields) {
+      const v = row[field];
+      if (typeof v === 'string') {
+        (row as Record<string, unknown>)[field as string] = serializeWallClockString(v);
+      }
+    }
+  }
+  return rows;
+}

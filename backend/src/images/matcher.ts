@@ -42,7 +42,7 @@ export async function matchToSamLog(input: MatchInput): Promise<MatchResult> {
       .input('tol', cfg.matchToleranceSeconds)
       .query(`
         SELECT TOP 1 1 AS found
-        FROM dbo.SAM_Log
+        FROM dbo.SAM_Log WITH (NOLOCK)
         WHERE DMC = @dmc
           AND Circlip_Time IS NOT NULL
           AND Circlip_Result IS NOT NULL
@@ -59,9 +59,9 @@ export async function matchToSamLog(input: MatchInput): Promise<MatchResult> {
   // RING — asymmetric window: image's capturedAt is allowed to be up to
   // `pre` seconds BEFORE Ring_Time (CV-X may finish the file write a moment
   // before the PLC logs the result) and up to `tol` seconds AFTER. We pick
-  // the LATEST Ring_Time inside the window — when attempts are close
-  // together, an image written in attempt N's tail must stay on attempt N
-  // and not cross over into attempt N+1's window.
+  // the Ring_Time CLOSEST to the image's capturedAt — so when reinspection
+  // attempts happen within minutes of each other, each image is correctly
+  // routed to its own attempt instead of all funnelling to the latest.
   const result = await pool
     .request()
     .input('dmc', input.fullDmc)
@@ -70,7 +70,7 @@ export async function matchToSamLog(input: MatchInput): Promise<MatchResult> {
     .input('pre', cfg.matchPreToleranceSeconds)
     .query(`
       SELECT TOP 1 Ring_Count
-      FROM dbo.SAM_Log
+      FROM dbo.SAM_Log WITH (NOLOCK)
       WHERE DMC = @dmc
         AND Ring_Time IS NOT NULL
         AND Ring_Result IS NOT NULL
@@ -82,7 +82,10 @@ export async function matchToSamLog(input: MatchInput): Promise<MatchResult> {
               TRY_CONVERT(DATETIME2, Ring_Time, 120),
               TRY_CONVERT(DATETIME2, @capturedAt, 120)
             ) <= @tol
-      ORDER BY TRY_CONVERT(DATETIME2, Ring_Time, 120) DESC
+      ORDER BY ABS(DATEDIFF(SECOND,
+        TRY_CONVERT(DATETIME2, Ring_Time, 120),
+        TRY_CONVERT(DATETIME2, @capturedAt, 120)
+      )) ASC
     `);
 
   if (result.recordset.length > 0) {

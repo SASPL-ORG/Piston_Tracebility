@@ -1,4 +1,5 @@
 import { format, subDays, startOfMonth, parseISO } from 'date-fns';
+import { formatPlantName } from '../lib/api';
 
 interface DateRangePickerProps {
   from: string;
@@ -97,7 +98,7 @@ export default function DateRangePicker({ from, to, plant, plants, onChange, tod
           >
             <option value="">All Plants</option>
             {plants.map((p) => (
-              <option key={p} value={p}>{p}</option>
+              <option key={p} value={p}>{formatPlantName(p)}</option>
             ))}
           </select>
         </div>

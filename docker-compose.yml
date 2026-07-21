@@ -19,6 +19,63 @@ services:
       # box's local TZ, and the matcher formats file mtimes with the same
       # local-time methods. Must match the SCADA box's local timezone.
       - TZ=${TZ:-UTC}
+      # Image-matcher tolerance (seconds). CV-X writes the JPG when it captures;
+      # the PLC stamps Ring_Time / Circlip_Time when the inspection cycle
+      # completes — typically a few seconds later, sometimes 1-3 minutes for
+      # ring (25 shots in a row). Window: capturedAt in [PLC_stamp - PRE, PLC_stamp + POST].
+      # Matcher tolerance — file mtime to SAM_Log time. Widened from 300s
+      # to 900s (15 min) to absorb operator-override scenarios where the
+      # PLC stamps Circlip_Time at the original fail moment, then the
+      # operator inspects, overrides, and CV-X captures the confirming
+      # image several minutes later. Still tight enough that an unrelated
+      # part can't match (matcher filters by DMC first).
+      - IMAGE_MATCH_PRE_TOLERANCE_SECONDS=${IMAGE_MATCH_PRE_TOLERANCE_SECONDS:-900}
+      - IMAGE_MATCH_TOLERANCE_SECONDS=${IMAGE_MATCH_TOLERANCE_SECONDS:-900}
+      # Source-folder polling cadence. CV-X writes a new frame every 1-3 sec.
+      # Bumped from 500ms → 5000ms because the incoming folder had grown
+      # to ~9,900 files and the sub-second re-scan was hammering the DB
+      # (SAM_Log reader locks blocked reporting queries → dashboard 30s
+      # timeouts). 5s cadence is still well under the operator's minimum
+      # wait time between clicks; images arrive within 5 s of CV-X write.
+      # Restore the 500 ms setting once the backlog is drained.
+      - IMAGE_SCAN_INTERVAL_MS=${IMAGE_SCAN_INTERVAL_MS:-5000}
+      # Concurrent match/move workers. Kept at the original 4 — bumping to
+      # 16 during backlog testing caused all workers to deadlock on SQL
+      # 30s request timeouts, so 4 is actually FASTER than 16 (they
+      # complete instead of all timing out). Small worker count also
+      # bounds the churn against SAM_Log while the PLC is writing.
+      - IMAGE_WORKER_COUNT=${IMAGE_WORKER_COUNT:-4}
+      # ---- Maintenance / Tool Life admin gate ---------------------------
+      # The Tool Life table on the Maintenance page asks for these creds
+      # before letting an operator change Life-in-Quantity or hit Reset.
+      # ADMIN_PASSWORD MUST be set in your .env (or shell) for the gate
+      # to work — when empty, the backend returns 503 and the frontend
+      # blocks edits with a "not configured" message.
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      # ---- Node-RED webhook for tool-life-exhausted PLC stop signal -----
+      # When a tool's Quantity Left reaches zero, the frontend POSTs to
+      # the backend, which relays a JSON event to this Node-RED HTTP-In
+      # endpoint. Your NR flow then writes the PLC stop tag. Leave the
+      # URL empty in dev to suppress the webhook call (the UI still
+      # shows the exhaustion alert; only the PLC signal is skipped).
+      # Token is optional — sent as `Authorization: Bearer <token>`.
+      #
+      # PLC contract (see docs/TOOL_LIFE_PLC_WIRING.md):
+      #   target bit: DB1000.DBX682.0  ("Tool Life Count Reached", Bool)
+      #   action:     latched TRUE; PLC owns the reset
+      #   NR env var: PLC_TOOL_LIFE_LOCKOUT_ADDR (set on the NR host,
+      #               NOT here — NR's env is separate from the backend's)
+      - NODE_RED_TOOL_LIFE_WEBHOOK_URL=${NODE_RED_TOOL_LIFE_WEBHOOK_URL:-}
+      - NODE_RED_WEBHOOK_TOKEN=${NODE_RED_WEBHOOK_TOKEN:-}
+      # ---- Machine Status -----------------------------------------------
+      # As of v3 the headline math reads PLC state bits directly from
+      # dbo.vw_machine_state (RUNNING / FAULT / IDLE) — no cycle-time
+      # estimate or alarm-overlap inference needed. ALARM_EXCLUDE only
+      # affects the "alarms active during faults" diagnostic table:
+      # comma-separated exact alarm names that aren't real line-stoppers
+      # (status pulses, "ready" signals, etc.). Empty in dev.
+      - ALARM_EXCLUDE=${ALARM_EXCLUDE:-}
     volumes:
       - ./data/exports:/data/exports
       - ./data/logs:/data/logs
@@ -31,6 +88,16 @@ services:
     networks:
       - traceability-network
     restart: unless-stopped
+    # Self-heal backup: if the in-process retry loops ever miss an edge
+    # case and /health stops responding, Docker restarts the container.
+    # `start_period` lets the SQL connect loop run for a full minute
+    # before Docker counts a failure.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
   ui:
     build:

@@ -1,4 +1,5 @@
 import { promises as fs } from 'fs';
+import path from 'path';
 import { getImageConfig } from './config.js';
 import { findExpiredImages, deleteImageRow } from './db.js';
 import { logAlarm } from './alarms.js';
@@ -15,6 +16,8 @@ export async function runRetention(): Promise<{
   let deleted = 0;
   let fileErrors = 0;
 
+  const thumbDir = path.join(cfg.outputPath, '__thumbs');
+
   for (const row of expired) {
     try {
       await fs.unlink(row.file_path);
@@ -22,6 +25,11 @@ export async function runRetention(): Promise<{
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT') fileErrors++;
     }
+    // Best-effort cleanup of the cached thumbnail. ENOENT is fine — many
+    // images never have their thumb generated.
+    await fs
+      .unlink(path.join(thumbDir, `${row.id}.jpg`))
+      .catch(() => undefined);
     try {
       await deleteImageRow(row.id);
       deleted++;

@@ -16,7 +16,8 @@
     "json2csv": "^6.0.0-alpha.2",
     "mssql": "^11.0.1",
     "node-cron": "^3.0.3",
-    "pdfkit": "^0.15.2"
+    "pdfkit": "^0.15.2",
+    "sharp": "^0.33.5"
   },
   "devDependencies": {
     "@types/mssql": "^9.1.11",

@@ -155,7 +155,7 @@ export default function Images() {
           <Cpu size={48} className="mx-auto text-gray-300 mb-4" />
           <h3 className="text-lg font-medium text-gray-600">Search for a Part</h3>
           <p className="text-sm text-gray-400 mt-1">
-            Enter a DMC to view its inspection images, grouped by Circlip and Ring attempts.
+            Enter a DMC to view its inspection images, grouped by Snap Ring and Ring attempts.
           </p>
         </div>
       )}

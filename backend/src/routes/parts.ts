@@ -1,14 +1,126 @@
 import { FastifyInstance } from 'fastify';
 import { getPool } from '../db/connection.js';
-import { classifyState } from '../db/state.js';
+import { classifyState, stripDmcSeparators, DMC_SEPARATOR_CHARS } from '../db/state.js';
 import { serializeDateTime, serializeDateTimeFields } from '../db/datetime.js';
 import { renderPartTracePdf, deriveSerializedRecords } from '../reports/partTracePdf.js';
 import type {
   AlarmEvent,
   AlarmStatus,
+  EventTimelineStep,
   PartTraceResponse,
   SamLogRecord,
 } from '../types/index.js';
+
+// Internal-only widening of SamLogRecord so the timeline builder can
+// read the NR-stamped rejection-reason columns (which we deliberately
+// don't expose on the public SamLogRecord type — see types/index.ts).
+type SamLogRowWithReason = SamLogRecord & {
+  Circlip_Rejection_Reason?: string | null;
+  Ring_Rejection_Reason?: string | null;
+};
+
+const RING_ASSEMBLY_SUBSTATIONS = [
+  'Expander Ring',
+  'Bottom Ring',
+  'Bottom Rail Ring',
+  'Second Ring',
+  'Top Ring',
+];
+
+// Build the 13-event journey from the part's SAM_Log rows. Visibility
+// rules come straight from event_timeline_brief.md:
+//   - SAM_Log row exists                  → event 3
+//   - earliest row has Circlip_Time       → events 4, 5, 6, 7
+//   - event 7 = FAIL                      → event 8, stop
+//   - latest row has Ring_Time            → events 9, 10, 11, 12, 13
+//   - event 13 = FAIL                     → event 14, stop
+//   - Unloading_Time set on latest row    → event 15
+//
+// Earliest row carries the loading + circlip data (Ring_Count 0 or 1);
+// latest row carries the most recent ring + unload data. This handles
+// re-inspections — only the final state appears at event 13.
+function buildEventTimeline(records: SamLogRowWithReason[]): EventTimelineStep[] {
+  const timeline: EventTimelineStep[] = [];
+  if (records.length === 0) return timeline;
+
+  const earliest = records[0];
+  const latest = records[records.length - 1];
+
+  // Event 3 — always shown once SAM_Log has a row for the DMC.
+  timeline.push({
+    step: 3,
+    label: 'DMC1 — Loading Scan',
+    type: 'checkpoint',
+    timestamp: earliest.Date_Time,
+    status: 'OK',
+    reason: null,
+  });
+
+  // Snap-ring branch — gated on Circlip_Time being stamped.
+  if (!earliest.Circlip_Time) return timeline;
+
+  timeline.push({ step: 4, label: 'Gantry 1',                  type: 'intermediate' });
+  timeline.push({ step: 5, label: 'Snap Ring Assembly Station', type: 'intermediate' });
+  timeline.push({ step: 6, label: 'DMC2 — Barcode Scan',        type: 'intermediate' });
+
+  const circlipFail = earliest.Circlip_Result === 'FAIL';
+  timeline.push({
+    step: 7,
+    label: 'Circlip Inspection',
+    type: 'checkpoint',
+    timestamp: earliest.Circlip_Time,
+    status: circlipFail ? 'FAIL' : 'OK',
+    reason: circlipFail ? (earliest.Circlip_Rejection_Reason ?? null) : null,
+  });
+
+  if (circlipFail) {
+    timeline.push({ step: 8, label: 'Circlip Rejection Conveyor', type: 'conditional' });
+    return timeline;
+  }
+
+  // Ring branch — gated on the latest row having Ring_Time stamped.
+  if (!latest.Ring_Time) return timeline;
+
+  timeline.push({ step: 9,  label: 'Ring Presence Sensor', type: 'intermediate' });
+  timeline.push({
+    step: 10,
+    label: 'Ring Assembly Station',
+    type: 'intermediate',
+    substations: RING_ASSEMBLY_SUBSTATIONS,
+  });
+  timeline.push({ step: 11, label: 'Ring Part Presence', type: 'intermediate' });
+  timeline.push({ step: 12, label: 'DMC3 — Barcode Scan', type: 'intermediate' });
+
+  const ringFail = latest.Ring_Result === 'FAIL';
+  timeline.push({
+    step: 13,
+    label: 'Ring Inspection',
+    type: 'checkpoint',
+    timestamp: latest.Ring_Time,
+    status: ringFail ? 'FAIL' : 'OK',
+    reason: ringFail ? (latest.Ring_Rejection_Reason ?? null) : null,
+    attempts: latest.Ring_Count ?? 1,
+  });
+
+  if (ringFail) {
+    timeline.push({ step: 14, label: 'Ring Rejection Conveyor', type: 'conditional' });
+    return timeline;
+  }
+
+  // Packed = Unloading_Time stamped on the latest row.
+  if (latest.Unloading_Time) {
+    timeline.push({
+      step: 15,
+      label: 'Packing Station',
+      type: 'checkpoint',
+      timestamp: latest.Unloading_Time,
+      status: 'COMPLETED',
+      reason: null,
+    });
+  }
+
+  return timeline;
+}
 
 interface PartParams {
   dmc: string;
@@ -16,13 +128,36 @@ interface PartParams {
 
 async function fetchPartRecords(dmc: string): Promise<SamLogRecord[]> {
   const pool = await getPool();
-  const result = await pool
+  const order = 'ORDER BY ISNULL(Ring_Count, 0) ASC, Date_Time ASC';
+
+  // Fast path: exact match on the indexed DMC column. Part Trace passes the
+  // stored key verbatim, so this is the common case and stays sargable.
+  const exact = await pool
     .request()
     .input('dmc', dmc)
+    .query(`SELECT * FROM dbo.SAM_Log WHERE DMC = @dmc ${order}`);
+  if (exact.recordset.length > 0) return exact.recordset as SamLogRecord[];
+
+  // Fallback: separator-insensitive match. A packing-station scan arrives as
+  // the raw ISO/IEC 15434 envelope (control bytes intact) while the stored key
+  // has those separators rewritten to '.'/'-', so the exact match above misses.
+  // We reduce BOTH sides to their separator-free core (the SQL TRANSLATE here
+  // mirrors stripDmcSeparators / normalizeScannedDmc) and compare. TRANSLATE
+  // maps every separator to CHAR(1), which REPLACE then strips. This is a
+  // non-sargable full scan, but packing lookups are one-at-a-time and only
+  // reach this path after the indexed lookup found nothing.
+  const norm = stripDmcSeparators(dmc);
+  if (!norm) return [];
+  const reduced = await pool
+    .request()
+    .input('norm', norm)
+    .input('seps', DMC_SEPARATOR_CHARS)
     .query(
-      'SELECT * FROM dbo.SAM_Log WHERE DMC = @dmc ORDER BY ISNULL(Ring_Count, 0) ASC, Date_Time ASC',
+      `SELECT * FROM dbo.SAM_Log
+       WHERE REPLACE(TRANSLATE(DMC, @seps, REPLICATE(CHAR(1), LEN(@seps))), CHAR(1), '') = @norm
+       ${order}`,
     );
-  return result.recordset as SamLogRecord[];
+  return reduced.recordset as SamLogRecord[];
 }
 
 // Loads PLC alarm edge events for this part. BatchID column on PLC_Alarms
@@ -64,12 +199,35 @@ export default async function partRoutes(app: FastifyInstance) {
     }
 
     serializeDateTimeFields(records as unknown as Record<string, unknown>[]);
-    const latest = records[records.length - 1];
+    const lastRow = records[records.length - 1];
     const hasCirclipFail = records.some((r) => r.Circlip_Result === 'FAIL');
     const totalAttempts = records.reduce(
       (max, r) => Math.max(max, r.Ring_Count ?? 0),
       0,
     );
+
+    // For a reinspected part, the PLC only writes Circlip_Result/Time on
+    // the first row; subsequent re-attempt rows have NULL there. The UI's
+    // "Current State" panel reads from `latest`, so without this merge the
+    // Circlip Status would show as blank for any reinspected part.
+    //
+    // Prefer a PASS row over a FAIL row when both exist — for a part
+    // saved by snap-ring reinspection we display the PASS that saved
+    // it (and its timestamp), not the original FAIL. Falls back to any
+    // non-null Circlip row when no PASS row exists. Mirrors the
+    // ROW_NUMBER ordering in backend/src/routes/lists.ts so the two
+    // pages agree.
+    const circlipRow =
+      records.find((r) => r.Circlip_Result === 'PASS') ??
+      records.find((r) => r.Circlip_Result !== null);
+    const latest = {
+      ...lastRow,
+      Circlip_Result: lastRow.Circlip_Result ?? circlipRow?.Circlip_Result ?? null,
+      Circlip_Time: lastRow.Circlip_Time ?? circlipRow?.Circlip_Time ?? null,
+    };
+
+    const event_timeline = buildEventTimeline(records as SamLogRowWithReason[]);
+    req.log.info(`[part-trace] dmc=${dmc} → ${event_timeline.length} events in timeline`);
 
     const response: PartTraceResponse = {
       dmc,
@@ -84,6 +242,7 @@ export default async function partRoutes(app: FastifyInstance) {
         last_seen: latest.Date_Time,
       },
       alarms,
+      event_timeline,
     };
     return response;
   });

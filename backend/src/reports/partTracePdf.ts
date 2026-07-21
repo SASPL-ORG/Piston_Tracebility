@@ -6,9 +6,10 @@ import type { PartState, SamLogRecord } from '../types/index.js';
 
 const STATE_LABEL: Record<PartState, string> = {
   PACKED: 'Packed',
+  COMPLETED: 'Completed',
   RING_OK: 'Ring OK',
   RING_NG: 'Ring Rejected',
-  CIRCLIP_SCRAP: 'Circlip Scrap',
+  CIRCLIP_SCRAP: 'Snap Ring Scrap',
   IN_PROGRESS: 'In Progress',
 };
 
@@ -24,6 +25,14 @@ const COLOR = {
 
 function fmt(value: string | null | undefined): string {
   if (value === null || value === undefined || value === '') return '-';
+  return value;
+}
+
+// Display-time rename for plant IDs. The DB still stores 'Sam Plant'; we
+// show the customer-facing name everywhere in the UI and in PDF reports.
+function fmtPlant(value: string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '-';
+  if (value === 'Sam Plant') return 'IPL Ring Assembly Plant - Anantapur';
   return value;
 }
 
@@ -121,11 +130,11 @@ function drawTimelineRow(doc: PDFKit.PDFDocument, r: SamLogRecord): void {
 
   doc.fontSize(10).font('Helvetica-Bold').fillColor(color).text(fmtDateTime(r.Date_Time), x0);
   doc.fontSize(9).font('Helvetica').fillColor(COLOR.muted).text(
-    `Plant: ${fmt(r.Plant_Id)}     Result: ${fmt(r.Result)}     Ring Count: ${r.Ring_Count ?? '-'}`,
+    `Plant: ${fmtPlant(r.Plant_Id)}     Result: ${fmt(r.Result)}     Ring Count: ${r.Ring_Count ?? '-'}`,
     x0 + 12,
   );
   doc.fillColor('black').text(
-    `Circlip: ${fmt(r.Circlip_Result)} (${fmt(r.Circlip_Time)})     ` +
+    `Snap Ring: ${fmt(r.Circlip_Result)} (${fmt(r.Circlip_Time)})     ` +
       `Ring: ${fmt(r.Ring_Result)} (${fmt(r.Ring_Time)})     ` +
       `Unload: ${fmt(r.Unloading_Time)}`,
     x0 + 12,
@@ -166,11 +175,11 @@ export function renderPartTracePdf(input: PartTracePdfInput): Readable {
   sectionHeader(doc, 'Current State');
   drawKeyValueTable(doc, [
     ['State', STATE_LABEL[state], stateColor(state)],
-    ['Plant', fmt(latest?.Plant_Id)],
+    ['Plant', fmtPlant(latest?.Plant_Id)],
     ['Total Records', String(records.length)],
     ['Ring Attempts', String(totalAttempts)],
     ['Reinspected', totalAttempts > 1 ? 'Yes' : 'No'],
-    ['Latest Circlip', fmt(latest?.Circlip_Result), resultColor(latest?.Circlip_Result)],
+    ['Latest Snap Ring', fmt(latest?.Circlip_Result), resultColor(latest?.Circlip_Result)],
     ['Latest Ring', fmt(latest?.Ring_Result), resultColor(latest?.Ring_Result)],
     ['Latest Unload Time', fmt(latest?.Unloading_Time)],
     ['First Seen', fmtDateTime(records[0]?.Date_Time)],

@@ -4,9 +4,11 @@ import { Search, CheckCircle, XCircle, Hash, Activity, RotateCw, Cpu, Image as I
 import clsx from 'clsx';
 import ResultBadge from '../components/ResultBadge';
 import StateBadge from '../components/StateBadge';
+import EventTimeline from '../components/EventTimeline';
 import {
   fetchPart,
   formatDateTime,
+  formatPlantName,
   formatTimestamp,
   partTracePdfUrl,
   PART_STATE_LABEL,
@@ -83,6 +85,7 @@ export default function PartTrace() {
   const records: SamLogRecord[] = response?.records ?? [];
   const summary = response?.summary;
   const alarms = response?.alarms ?? [];
+  const eventTimeline = response?.event_timeline ?? [];
 
   return (
     <div className="space-y-6">
@@ -152,7 +155,7 @@ export default function PartTrace() {
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-sm text-gray-500 w-28 shrink-0">Plant:</span>
-                <span className="text-sm font-medium text-gray-800">{summary.latest.Plant_Id || '-'}</span>
+                <span className="text-sm font-medium text-gray-800">{formatPlantName(summary.latest.Plant_Id)}</span>
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-sm text-gray-500 w-28 shrink-0">Ring Attempts:</span>
@@ -165,7 +168,7 @@ export default function PartTrace() {
                 )}
               </div>
               <div className="flex items-center gap-3">
-                <span className="text-sm text-gray-500 w-28 shrink-0">Circlip Status:</span>
+                <span className="text-sm text-gray-500 w-28 shrink-0">Snap Ring Status:</span>
                 <ResultBadge value={summary.latest.Circlip_Result} />
               </div>
               <div className="flex items-center gap-3">
@@ -227,7 +230,7 @@ export default function PartTrace() {
                         )}
                       >
                         <span className="text-xs font-bold text-gray-700 bg-gray-200 px-2.5 py-1 rounded uppercase tracking-wide">
-                          Circlip
+                          Snap Ring
                         </span>
                         <span className="text-xs text-gray-500">Attempt 1</span>
                         <span
@@ -238,7 +241,9 @@ export default function PartTrace() {
                         >
                           {record.Circlip_Result}
                         </span>
-                        <span className="text-xs text-gray-500">Time: {formatDateTime(record.Date_Time)}</span>
+                        <span className="text-xs text-gray-500">
+                          Time: {formatDateTime(record.Circlip_Time ?? record.Date_Time)}
+                        </span>
                         <Link
                           to={`/images?dmc=${encodeURIComponent(searchedDmc)}&inspection_type=CIRCLIP`}
                           className="ml-auto inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"
@@ -269,7 +274,9 @@ export default function PartTrace() {
                         >
                           {record.Ring_Result}
                         </span>
-                        <span className="text-xs text-gray-500">Time: {formatDateTime(record.Date_Time)}</span>
+                        <span className="text-xs text-gray-500">
+                          Time: {formatDateTime(record.Ring_Time ?? record.Date_Time)}
+                        </span>
                         <Link
                           to={`/images?dmc=${encodeURIComponent(searchedDmc)}&inspection_type=RING&attempt=${record.Ring_Count ?? 1}`}
                           className="ml-auto inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"
@@ -329,85 +336,18 @@ export default function PartTrace() {
             )}
           </div>
 
-          {/* Event Timeline */}
+          {/* Event Timeline — 13-station journey of the part through the
+              line. 4 of the events are real PLC checkpoints (3, 7, 13,
+              15); the rest are deterministic intermediate stations
+              rendered by name when the part progressed past them.
+              Re-inspection history lives in Inspection Attempts above —
+              this timeline shows only the final state at event 13. */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
             <div className="flex items-center gap-3 mb-5">
               <div className="w-1 h-6 bg-blue-600 rounded-full" />
               <h2 className="text-lg font-semibold text-gray-800">Event Timeline</h2>
             </div>
-            <div className="relative">
-              <div className="absolute left-6 top-0 bottom-0 w-0.5 bg-blue-200" />
-              <div className="space-y-4">
-                {records.map((record, i) => {
-                  const isPass = record.Result === 'PASS';
-                  return (
-                    <div key={i} className="relative flex gap-4 pl-3">
-                      <div
-                        className={clsx(
-                          'relative z-10 w-7 h-7 rounded-full flex items-center justify-center shrink-0',
-                          isPass ? 'bg-emerald-500' : 'bg-red-500',
-                        )}
-                      >
-                        {isPass ? <CheckCircle size={14} className="text-white" /> : <XCircle size={14} className="text-white" />}
-                      </div>
-                      <div className="flex-1 bg-gray-50 rounded-lg border border-gray-200 p-4 -mt-1">
-                        <div className="flex flex-wrap items-center gap-3 mb-2">
-                          <span className="text-xs text-gray-400">{formatDateTime(record.Date_Time)}</span>
-                          <span className="text-xs font-bold text-gray-600 bg-gray-200 px-2 py-0.5 rounded">{record.Plant_Id}</span>
-                          <ResultBadge value={record.Result} />
-                        </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                          <div>
-                            <span className="text-gray-400">Circlip:</span>{' '}
-                            <span
-                              className={clsx(
-                                'font-semibold',
-                                record.Circlip_Result === 'PASS'
-                                  ? 'text-emerald-600'
-                                  : record.Circlip_Result === 'FAIL'
-                                    ? 'text-red-600'
-                                    : 'text-gray-400',
-                              )}
-                            >
-                              {record.Circlip_Result || '-'}
-                            </span>
-                            {record.Circlip_Time && (
-                              <span className="text-gray-400"> ({formatTimestamp(record.Circlip_Time)})</span>
-                            )}
-                          </div>
-                          <div>
-                            <span className="text-gray-400">Ring:</span>{' '}
-                            <span
-                              className={clsx(
-                                'font-semibold',
-                                record.Ring_Result === 'PASS'
-                                  ? 'text-emerald-600'
-                                  : record.Ring_Result === 'FAIL'
-                                    ? 'text-red-600'
-                                    : 'text-gray-400',
-                              )}
-                            >
-                              {record.Ring_Result || '-'}
-                            </span>
-                            {record.Ring_Time && (
-                              <span className="text-gray-400"> ({formatTimestamp(record.Ring_Time)})</span>
-                            )}
-                          </div>
-                          <div>
-                            <span className="text-gray-400">Ring Count:</span>{' '}
-                            <span className="font-semibold text-gray-700">{record.Ring_Count ?? '-'}</span>
-                          </div>
-                          <div>
-                            <span className="text-gray-400">Unload:</span>{' '}
-                            <span className="font-semibold text-gray-700">{formatTimestamp(record.Unloading_Time)}</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+            <EventTimeline steps={eventTimeline} />
           </div>
         </>
       )}

@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
 import { format, subDays } from 'date-fns';
-import { RefreshCw, Wrench, AlertTriangle, CheckCircle, AlertOctagon } from 'lucide-react';
+import { RefreshCw, Wrench, AlertTriangle, CheckCircle, AlertOctagon, Bell, Gauge } from 'lucide-react';
 import clsx from 'clsx';
 import { fetchMaintenanceStatus, fetchMaintenanceHistory, MaintenanceComponent } from '../lib/api';
+import AlarmsPanel from '../components/AlarmsPanel';
+import ToolLifePanel from '../components/ToolLifePanel';
+import NotificationBell from '../components/NotificationBell';
 
 function StatusBadge({ status }: { status: string }) {
   const config: Record<string, { bg: string; text: string; icon: typeof CheckCircle }> = {
@@ -46,6 +49,9 @@ function getBarColor(value: number, max: number): string {
 }
 
 export default function Maintenance() {
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [showAlarmsPanel, setShowAlarmsPanel] = useState(false);
+  const [showToolLifePanel, setShowToolLifePanel] = useState(false);
   const [components, setComponents] = useState<MaintenanceComponent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -101,19 +107,65 @@ export default function Maintenance() {
           <div className="w-1 h-8 bg-blue-600 rounded-full" />
           <h1 className="text-2xl font-bold text-gray-900">Maintenance Module</h1>
         </div>
-        <button
-          onClick={loadStatus}
-          disabled={loading}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
-        >
-          <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-          Refresh Status
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Tools menu: PLC alarms today + extension point for future operator tools */}
+          <div className="relative">
+            <button
+              onClick={() => setToolsOpen((v) => !v)}
+              onBlur={() => setTimeout(() => setToolsOpen(false), 150)}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-slate-700 text-white text-sm font-medium rounded-lg hover:bg-slate-800 transition-colors"
+            >
+              <Wrench size={16} />
+              Tools
+            </button>
+            {toolsOpen && (
+              <div className="absolute right-0 mt-2 w-56 bg-white border border-gray-200 rounded-lg shadow-lg z-20 overflow-hidden">
+                <button
+                  onMouseDown={(e) => {
+                    // onMouseDown fires before the button's onBlur, so the
+                    // dropdown is still open when we read intent.
+                    e.preventDefault();
+                    setToolsOpen(false);
+                    setShowAlarmsPanel(true);
+                  }}
+                  className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-100 inline-flex items-center gap-2"
+                >
+                  <Bell size={14} className="text-red-500" />
+                  PLC Alarms
+                </button>
+                <button
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    setToolsOpen(false);
+                    setShowToolLifePanel(true);
+                  }}
+                  className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-100 inline-flex items-center gap-2"
+                >
+                  <Gauge size={14} className="text-blue-600" />
+                  Tool Life
+                </button>
+              </div>
+            )}
+          </div>
+          <button
+            onClick={loadStatus}
+            disabled={loading}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+            Refresh Status
+          </button>
+          <NotificationBell onOpenToolLife={() => setShowToolLifePanel(true)} />
+        </div>
       </div>
 
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>
       )}
+
+      {/* Inline tool panels — shown when the user picks a tool from the Tools menu */}
+      {showAlarmsPanel && <AlarmsPanel onClose={() => setShowAlarmsPanel(false)} />}
+      {showToolLifePanel && <ToolLifePanel onClose={() => setShowToolLifePanel(false)} />}
 
       {/* Current Component Status */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
