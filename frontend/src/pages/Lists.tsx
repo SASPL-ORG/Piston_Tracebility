@@ -26,6 +26,20 @@ import {
 } from '../lib/api';
 import { useSessionState } from '../lib/useSessionState';
 
+// A part sits in IN_PROGRESS until a ring result is written. If the ring
+// station never records one (part pulled off the line, line stopped mid-cycle,
+// or the PLC/Node-RED write was lost) it stays IN_PROGRESS forever and quietly
+// inflates the count. Flagging the old ones keeps them visually distinct from
+// parts that are genuinely mid-inspection right now.
+const STALE_IN_PROGRESS_HOURS = 2;
+
+function isStaleInProgress(row: PartListItem): boolean {
+  if (row.state !== 'IN_PROGRESS' || !row.Date_Time) return false;
+  const ts = new Date(row.Date_Time).getTime();
+  if (Number.isNaN(ts)) return false;
+  return Date.now() - ts > STALE_IN_PROGRESS_HOURS * 3600_000;
+}
+
 const TYPE_OPTIONS: { value: ListType; label: string }[] = [
   { value: 'all', label: 'All Results' },
   { value: 'passed', label: 'Passed' },
@@ -736,7 +750,17 @@ export default function Lists() {
                         </div>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
-                        <StateBadge state={row.state} />
+                        <div className="inline-flex items-center gap-1.5">
+                          <StateBadge state={row.state} />
+                          {isStaleInProgress(row) && (
+                            <span
+                              title={`No ring result recorded for over ${STALE_IN_PROGRESS_HOURS} hours - this part is not actively being inspected`}
+                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200"
+                            >
+                              Stale
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <ResultBadge value={row.Circlip_Result} />
