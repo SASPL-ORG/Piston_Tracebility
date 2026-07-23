@@ -6,6 +6,7 @@ import {
   STATE_CASE_SQL,
   STATE_CASE_SQL_DISPLAY,
   PACKED_LOG_JOIN_SQL,
+  CIRCLIP_REINSPECTED_SQL,
   rejectionReasonSql,
   isRejectionReason,
 } from '../db/state.js';
@@ -113,7 +114,7 @@ const SUMMARY_BUCKET_CASE = `CASE
   WHEN ${STATE_CASE_SQL} = 'IN_PROGRESS' THEN 'in_progress'
   WHEN ${STATE_CASE_SQL} = 'CIRCLIP_SCRAP' THEN 'circlip_fail'
   WHEN ${STATE_CASE_SQL} = 'RING_NG' THEN 'ring_fail'
-  WHEN p.has_circlip_fail = 1 AND p.has_circlip_pass = 1 THEN 'circlip_reinspected'
+  WHEN ${CIRCLIP_REINSPECTED_SQL} THEN 'circlip_reinspected'
   WHEN p.max_ring_count > 1 AND l.Ring_Result = 'PASS' THEN 'ring_reinspected'
   ELSE 'passed'
 END`;
@@ -135,7 +136,7 @@ function buildTypeWhere(type: string | undefined): string {
     // re-inspection but still failed end up under ring_rejected /
     // circlip_scrap, not here.
     case 'reinspected':
-      return "(state IN ('PACKED','RING_OK') AND (total_attempts > 1 OR (has_circlip_fail = 1 AND has_circlip_pass = 1)))";
+      return "(state IN ('PACKED','RING_OK') AND (total_attempts > 1 OR max_circlip_count > 1 OR (has_circlip_fail = 1 AND has_circlip_pass = 1)))";
     default:
       return '1 = 1';
   }
@@ -215,7 +216,10 @@ function classifiedSelect(): string {
       p.max_ring_count AS total_attempts,
       p.has_circlip_fail,
       p.has_circlip_pass,
-      CASE WHEN p.max_ring_count > 1 THEN 1 ELSE 0 END AS reinspected
+      p.max_circlip_count,
+      -- Reinspected = a ring retry (extra Ring_Count row) OR a snap-ring
+      -- retry (Circlip_Count incremented / the legacy fail-then-pass pair).
+      CASE WHEN p.max_ring_count > 1 OR ${CIRCLIP_REINSPECTED_SQL} THEN 1 ELSE 0 END AS reinspected
     FROM latest l
     INNER JOIN per_dmc p ON p.DMC = l.DMC
     ${PACKED_LOG_JOIN_SQL}

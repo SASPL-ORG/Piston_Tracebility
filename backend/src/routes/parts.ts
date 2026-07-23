@@ -210,6 +210,16 @@ export default async function partRoutes(app: FastifyInstance) {
       (max, r) => Math.max(max, r.Ring_Count ?? 0),
       0,
     );
+    // Snap-ring re-inspection is recorded by incrementing Circlip_Count on
+    // the same row (the FAIL is overwritten by the eventual PASS), so it
+    // does NOT add rows the way ring attempts do. Detect it separately, or
+    // a part re-inspected only at the snap-ring station shows "Reinspected:
+    // No" while its Circlip_Count sits at 8.
+    const maxCirclipCount = records.reduce(
+      (max, r) => Math.max(max, (r as SamLogRowWithReason & { Circlip_Count?: number | null }).Circlip_Count ?? 0),
+      0,
+    );
+    const reinspected = totalAttempts > 1 || maxCirclipCount > 1;
 
     // For a reinspected part, the PLC only writes Circlip_Result/Time on
     // the first row; subsequent re-attempt rows have NULL there. The UI's
@@ -241,7 +251,7 @@ export default async function partRoutes(app: FastifyInstance) {
       summary: {
         state: classifyState(latest, hasCirclipFail),
         total_attempts: totalAttempts,
-        reinspected: totalAttempts > 1,
+        reinspected,
         latest,
         first_seen: records[0].Date_Time,
         last_seen: latest.Date_Time,

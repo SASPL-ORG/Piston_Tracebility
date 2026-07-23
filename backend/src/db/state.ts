@@ -162,6 +162,15 @@ END`;
 // still shows up as packed once (we filter Is_Reject = 0 — reject scans
 // don't claim the bin slot). WITH (NOLOCK) — same rationale as SAM_Log
 // above: reporting queries tolerate dirty reads.
+// "Was this DMC's snap ring re-inspected?" — shared by the dashboard KPI,
+// the Lists summary matrix and the Lists reinspected filter so the three
+// can't drift. Fires on Circlip_Count > 1 (the real signal, see the CTE)
+// OR the legacy fail-then-pass pair (the handful of parts that did keep a
+// FAIL row). Expects p.max_circlip_count / p.has_circlip_fail /
+// p.has_circlip_pass in scope.
+export const CIRCLIP_REINSPECTED_SQL =
+  '(p.max_circlip_count > 1 OR (p.has_circlip_fail = 1 AND p.has_circlip_pass = 1))';
+
 export const PACKED_LOG_JOIN_SQL = `
   LEFT JOIN (
     SELECT DISTINCT DMC FROM dbo.Packed_Log_TEST WITH (NOLOCK) WHERE Is_Reject = 0
@@ -335,6 +344,12 @@ export function buildLatestPerDmcCte(extraConditions: string[]): string {
       MAX(Ring_Count) AS max_ring_count,
       MAX(CASE WHEN Circlip_Result = 'FAIL' THEN 1 ELSE 0 END) AS has_circlip_fail,
       MAX(CASE WHEN Circlip_Result = 'PASS' THEN 1 ELSE 0 END) AS has_circlip_pass,
+      -- Circlip re-inspection is recorded by INCREMENTING Circlip_Count on
+      -- the same row (Node-RED overwrites Circlip_Result FAIL->PASS), NOT by
+      -- adding a FAIL row the way ring attempts add rows. So the earlier
+      -- has_circlip_fail/has_circlip_pass pair almost never both fire, and
+      -- Circlip_Count is the real signal for "snap ring was re-inspected".
+      MAX(ISNULL(Circlip_Count, 0)) AS max_circlip_count,
       -- A circlip rejection reason on ANY row of the DMC stops the part at
       -- the station even when Circlip_Result was never written.
       MAX(CASE WHEN ${rejectionReasonSql('Circlip_Rejection_Reason')} THEN 1 ELSE 0 END) AS has_circlip_reject,

@@ -6,6 +6,7 @@ import {
   STATE_CASE_SQL,
   STATE_CASE_SQL_DISPLAY,
   PACKED_LOG_JOIN_SQL,
+  CIRCLIP_REINSPECTED_SQL,
   shiftWhereSql,
 } from '../db/state.js';
 import { cacheReads } from '../utils/responseCache.js';
@@ -96,7 +97,7 @@ export default async function dashboardRoutes(app: FastifyInstance) {
       WHEN ${STATE_CASE_SQL} = 'IN_PROGRESS' THEN 'in_progress'
       WHEN ${STATE_CASE_SQL} = 'CIRCLIP_SCRAP' THEN 'circlip_fail'
       WHEN ${STATE_CASE_SQL} = 'RING_NG' THEN 'ring_fail'
-      WHEN p.has_circlip_fail = 1 AND p.has_circlip_pass = 1 THEN 'circlip_reinspected'
+      WHEN ${CIRCLIP_REINSPECTED_SQL} THEN 'circlip_reinspected'
       WHEN p.max_ring_count > 1 AND l.Ring_Result = 'PASS' THEN 'ring_reinspected'
       ELSE 'passed'
     END`;
