@@ -256,7 +256,11 @@ export default async function partRoutes(app: FastifyInstance) {
         total_attempts: totalAttempts,
         reinspected,
         latest,
-        first_seen: records[0].Date_Time,
+        // "First seen" = when the part was loaded onto the line. Prefer the
+        // permanent Loading_Time; fall back to the earliest row's Date_Time
+        // for pre-feature parts (where Date_Time was later overwritten, so
+        // it's only an approximation).
+        first_seen: records[0].Loading_Time ?? records[0].Date_Time,
         last_seen: latest.Date_Time,
       },
       alarms,

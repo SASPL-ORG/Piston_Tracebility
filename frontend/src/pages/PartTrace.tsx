@@ -9,7 +9,6 @@ import {
   fetchPart,
   formatDateTime,
   formatPlantName,
-  formatTimestamp,
   partTracePdfUrl,
   PART_STATE_LABEL,
   PartResponse,
@@ -185,7 +184,7 @@ export default function PartTrace() {
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-sm text-gray-500 w-28 shrink-0">Unload Time:</span>
-                <span className="text-sm text-gray-800">{formatTimestamp(summary.latest.Unloading_Time)}</span>
+                <span className="text-sm text-gray-800">{formatDateTime(summary.latest.Unloading_Time)}</span>
               </div>
             </div>
           </div>

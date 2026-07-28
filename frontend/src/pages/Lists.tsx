@@ -772,7 +772,7 @@ export default function Lists() {
                           dmc={row.DMC}
                         />
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-gray-500">{row.Circlip_Time || '-'}</td>
+                      <td className="px-4 py-3 whitespace-nowrap text-gray-500">{formatDateTime(row.Circlip_Time)}</td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <ResultBadge value={row.Ring_Result} />
                       </td>
@@ -783,9 +783,9 @@ export default function Lists() {
                           dmc={row.DMC}
                         />
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-gray-500">{row.Ring_Time || '-'}</td>
+                      <td className="px-4 py-3 whitespace-nowrap text-gray-500">{formatDateTime(row.Ring_Time)}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-gray-700 font-medium">{row.total_attempts}</td>
-                      <td className="px-4 py-3 whitespace-nowrap text-gray-500">{row.Unloading_Time || '-'}</td>
+                      <td className="px-4 py-3 whitespace-nowrap text-gray-500">{formatDateTime(row.Unloading_Time)}</td>
                       <td className="px-4 py-3 whitespace-nowrap tabular-nums">
                         {age === null ? (
                           <span className="text-gray-300">-</span>
