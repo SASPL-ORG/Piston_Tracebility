@@ -56,7 +56,13 @@ export function getImageConfig(): ImageConfig {
     expectedCirclipPictures: envInt('EXPECTED_CIRCLIP_PICTURES_PER_ATTEMPT', 1),
     matchToleranceSeconds: envInt('IMAGE_MATCH_TOLERANCE_SECONDS', 300),
     matchPreToleranceSeconds: envInt('IMAGE_MATCH_PRE_TOLERANCE_SECONDS', 60),
-    pendingTimeoutMinutes: envInt('IMAGE_PENDING_TIMEOUT_MINUTES', 15),
+    // PATIENT PENDING: an image with no inspection row yet waits this long
+    // for the row to appear before being treated as unmatched. Raised from
+    // 15 min to 48 h so a Node-RED write outage (or any late write) doesn't
+    // permanently strand images — the moment the row lands, DMC-first
+    // matching attaches them. Pending rows are cheap; the pile-up health
+    // signal surfaces them if they accumulate.
+    pendingTimeoutMinutes: envInt('IMAGE_PENDING_TIMEOUT_MINUTES', 2880),
     retentionDays: envInt('IMAGE_RETENTION_DAYS', 365),
     fileHandling,
     // Default true on Linux containers reading Windows bind-mounts: inotify

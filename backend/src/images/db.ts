@@ -188,6 +188,18 @@ export async function findPendingImages(): Promise<PendingImageRow[]> {
   return result.recordset;
 }
 
+// Cheap indexed COUNT of images still waiting for their inspection row.
+// Powers the pile-up health signal — a rising number means images are
+// arriving faster than rows are being written (Node-RED/PLC problem), which
+// used to go unnoticed for days. Best-effort: callers default to 0 on error.
+export async function countPendingImages(): Promise<number> {
+  const pool = await getPool();
+  const result = await pool
+    .request()
+    .query('SELECT COUNT(*) AS n FROM dbo.Image_Index WITH (NOLOCK) WHERE pending_match = 1');
+  return result.recordset[0]?.n ?? 0;
+}
+
 export interface RetentionRow {
   id: number;
   file_path: string;

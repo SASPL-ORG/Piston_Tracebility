@@ -47,11 +47,14 @@ function buildEventTimeline(records: SamLogRowWithReason[]): EventTimelineStep[]
   const latest = records[records.length - 1];
 
   // Event 3 — always shown once SAM_Log has a row for the DMC.
+  // Prefer the permanent Loading_Time (the actual load-scan moment); fall
+  // back to Date_Time only for historical rows created before Loading_Time
+  // existed, where Date_Time is the closest thing we have.
   timeline.push({
     step: 3,
     label: 'DMC1 — Loading Scan',
     type: 'checkpoint',
-    timestamp: earliest.Date_Time,
+    timestamp: earliest.Loading_Time ?? earliest.Date_Time,
     status: 'OK',
     reason: null,
   });

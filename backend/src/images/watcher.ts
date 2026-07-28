@@ -173,8 +173,11 @@ export async function scanIncomingOnce(
 // image whose PLC stamp lands 30 seconds later keeps getting retried
 // until it matches.
 async function maybeQuarantine(filePath: string, log: (msg: string) => void): Promise<void> {
+  // Must sit BEYOND the patient-pending window (48 h) so a legitimately
+  // pending image — one still waiting for its inspection row — is never
+  // quarantined before that window closes. Raised 240 min → 72 h.
   const ageMinutes = Math.max(
-    parseInt(process.env.IMAGE_QUARANTINE_FILE_AGE_MINUTES || '240', 10),
+    parseInt(process.env.IMAGE_QUARANTINE_FILE_AGE_MINUTES || '4320', 10),
     1,
   );
   const next = (state.noMatchCount.get(filePath) ?? 0) + 1;

@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Package, CheckCircle, XCircle, AlertTriangle, Percent, RefreshCw, Clock, RotateCw } from 'lucide-react';
+import { Package, CheckCircle, XCircle, AlertTriangle, Percent, RefreshCw, Clock, RotateCw, Images as ImagesIcon } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import clsx from 'clsx';
 import KpiCard from '../components/KpiCard';
 import DateRangePicker from '../components/DateRangePicker';
 import {
   fetchDashboard,
+  fetchHealth,
+  HealthResponse,
   DashboardResponse,
   PartState,
   PART_STATE_LABEL,
@@ -55,6 +57,16 @@ export default function Dashboard() {
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  // Image-pipeline health pill — polled alongside the dashboard refresh.
+  const [imgHealth, setImgHealth] = useState<HealthResponse['imageWatcher'] | null>(null);
+  const loadHealth = useCallback(async () => {
+    try {
+      const h = await fetchHealth();
+      setImgHealth(h.imageWatcher);
+    } catch {
+      /* health pill is non-critical; ignore failures */
+    }
+  }, []);
 
   // Background refresh — same call as `loadData` but doesn't toggle the
   // page-level "loading" spinner. The Dashboard is meant to feel live;
@@ -84,7 +96,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadData();
-  }, [loadData]);
+    loadHealth();
+  }, [loadData, loadHealth]);
 
   // Auto-refresh every 30 s — Dashboard only. Skips when the tab is
   // backgrounded so we don't burn cycles for an unseen view, and skips
@@ -97,10 +110,11 @@ export default function Dashboard() {
       if (document.visibilityState !== 'visible') return;
       if (loading) return;
       void loadDataSilent();
+      void loadHealth();
     };
     const id = window.setInterval(tick, AUTO_REFRESH_MS);
     return () => window.clearInterval(id);
-  }, [loadDataSilent, loading]);
+  }, [loadDataSilent, loadHealth, loading]);
 
   const handleDateChange = (newFrom: string, newTo: string) => {
     setFrom(newFrom);
@@ -123,6 +137,28 @@ export default function Dashboard() {
           <h1 className="text-2xl font-bold text-gray-900">Production Dashboard</h1>
         </div>
         <div className="flex items-center gap-3">
+          {/* Image-pipeline pile-up pill: green when clear, amber when images
+              are backlogged waiting for their inspection rows. */}
+          {imgHealth && imgHealth.pendingImages !== null && (
+            <span
+              title={
+                imgHealth.backlogged
+                  ? `${imgHealth.pendingImages} images waiting for their inspection row — the line is producing images faster than rows are being written (check Node-RED / PLC).`
+                  : `Image pipeline healthy — ${imgHealth.pendingImages} images pending match.`
+              }
+              className={clsx(
+                'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border',
+                imgHealth.backlogged
+                  ? 'bg-amber-50 text-amber-700 border-amber-300'
+                  : 'bg-emerald-50 text-emerald-700 border-emerald-200',
+              )}
+            >
+              <ImagesIcon size={13} />
+              {imgHealth.backlogged
+                ? `Images backlogged: ${imgHealth.pendingImages}`
+                : 'Images OK'}
+            </span>
+          )}
           <span className="text-xs text-gray-400 hidden sm:inline">Auto-refreshing every 30s</span>
           <button
             onClick={loadData}

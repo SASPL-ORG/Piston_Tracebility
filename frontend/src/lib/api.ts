@@ -9,6 +9,20 @@ async function fetchJson<T>(url: string): Promise<T> {
   return res.json();
 }
 
+// ---- Health / image-pipeline pile-up signal --------------------------------
+export interface HealthResponse {
+  status: 'ok' | 'degraded';
+  imageWatcher: {
+    running: boolean;
+    pendingImages: number | null; // images waiting for their inspection row
+    backlogged: boolean; // pending over the warn threshold
+  };
+}
+
+export async function fetchHealth(): Promise<HealthResponse> {
+  return fetchJson<HealthResponse>('/health');
+}
+
 export type PartState =
   | 'PACKED'      // Zebra-scanned + recorded in Packed_Log_TEST
   | 'COMPLETED'   // Line says inspection-finished, but operator hasn't packed yet
@@ -643,7 +657,10 @@ export function getExportUrl(params: ListParams): string {
 // SSMS would show on the SCADA box regardless of viewer locale.
 export function formatDateTime(iso: string | null): string {
   if (!iso) return '-';
-  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+  // Accept both the serialized ISO form (…T…) and the PLC/server wall-clock
+  // form (…space…, e.g. Loading_Time '2026-07-28 15:09:30'), so every
+  // timeline timestamp formats as DD-MM-YYYY regardless of source column.
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/);
   if (!m) return iso;
   const [, y, mo, d, h, mi, s] = m;
   return `${d}-${mo}-${y} ${h}:${mi}:${s}`;

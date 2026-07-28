@@ -6,6 +6,12 @@ export interface SamLogRecord {
   Date_Time: string | null;
   Plant_Id: string | null;
   DMC: string | null;
+  // Permanent loading-scan time, written once at row creation and never
+  // overwritten (unlike Date_Time). NULL on rows created before the
+  // Loading_Time feature. Optional because not every query selects it and
+  // pre-feature rows lack it. Stored as a wall-clock string like the other
+  // *_Time columns, not a serialized datetime.
+  Loading_Time?: string | null;
   Circlip_Result: string | null;
   Circlip_Time: string | null;
   Ring_Result: string | null;
