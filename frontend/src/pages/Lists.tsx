@@ -727,7 +727,10 @@ export default function Lists() {
                       )}
                     >
                       <td className="px-4 py-3 whitespace-nowrap text-gray-500 font-medium">{sno}</td>
-                      <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDateTime(row.Date_Time)}</td>
+                      {/* Show the part's loading time (its true start), not the
+                          last-modified Date_Time which lands after circlip.
+                          Falls back to Date_Time for pre-feature rows. */}
+                      <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatDateTime(row.Loading_Time ?? row.Date_Time)}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-gray-600">{formatPlantName(row.Plant_Id)}</td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <div className="flex items-center gap-2">

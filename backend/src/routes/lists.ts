@@ -196,7 +196,7 @@ function classifiedSelect(): string {
   // main bottleneck at scale and is gone now.
   return `(
     SELECT
-      l.Date_Time, l.Plant_Id, l.DMC,
+      l.Date_Time, l.Loading_Time, l.Plant_Id, l.DMC,
       CASE
         WHEN ${STATE_CASE_SQL} IN ('PACKED','RING_OK') THEN 'PASS'
         WHEN ${STATE_CASE_SQL} = 'CIRCLIP_SCRAP' THEN 'FAIL'
@@ -316,6 +316,7 @@ export default async function listRoutes(app: FastifyInstance) {
       const counts = dmc ? imgCounts.get(dmc) : undefined;
       return {
         Date_Time: r.Date_Time as string | null,
+        Loading_Time: (r.Loading_Time as string | null) ?? null,
         Plant_Id: r.Plant_Id as string | null,
         DMC: dmc,
         Circlip_Result: r.Circlip_Result as string | null,

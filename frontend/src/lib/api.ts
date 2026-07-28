@@ -35,6 +35,9 @@ export interface SamLogRecord {
   Date_Time: string | null;
   Plant_Id: string | null;
   DMC: string | null;
+  // Permanent loading-scan time (NULL on pre-feature rows). Optional because
+  // not every query selects it. Wall-clock string, like the other *_Time cols.
+  Loading_Time?: string | null;
   Circlip_Result: string | null;
   Circlip_Time: string | null;
   Ring_Result: string | null;
