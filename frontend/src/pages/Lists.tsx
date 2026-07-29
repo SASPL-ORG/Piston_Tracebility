@@ -185,18 +185,25 @@ const SUMMARY_FLAT_CODES: { code: string; grade: string; category: string }[] =
     cat.subs.flatMap((sub) => sub.cells.map((c) => ({ ...c, category: cat.label }))),
   );
 
-// Age of an IN_PROGRESS row, measured from Circlip_Time to now, in minutes.
-// Returns null for terminal states (only in-progress rows carry an age —
-// packed, ring-rejected, etc. are already resolved). Parses Circlip_Time
-// as browser-local wall-clock; the SCADA PC runs on IST, matching the
-// stored value. Rows older than STUCK_THRESHOLD_MIN indicate the PLC
-// never recorded a Ring event for that piston — either physically pulled
-// off the line or a lost PLC/Node-RED event.
+// Age of an IN_PROGRESS row = how long it's been in progress, measured from
+// when the part was LOADED (Loading_Time) to now, in minutes. Returns null
+// for terminal states (only in-progress rows carry an age — packed,
+// ring-rejected, etc. are already resolved).
+//
+// Falls back to Circlip_Time then Date_Time for pre-Loading_Time rows.
+// Previously this measured from Circlip_Time and returned null when there
+// was none — so a part loaded but never circlip-inspected (the exact stale
+// case, and the one you most want an age for) showed a blank age. Parsed as
+// browser-local wall-clock; the SCADA PC runs on IST, matching the stored
+// value. Rows older than STUCK_THRESHOLD_MIN indicate the part never
+// progressed — physically pulled off the line, a manual/trial run, or a lost
+// PLC/Node-RED event.
 const STUCK_THRESHOLD_MIN = 60;
 function ageMinutes(row: PartListItem): number | null {
   if (row.state !== 'IN_PROGRESS') return null;
-  if (!row.Circlip_Time) return null;
-  const t = new Date(row.Circlip_Time).getTime();
+  const ref = row.Loading_Time ?? row.Circlip_Time ?? row.Date_Time;
+  if (!ref) return null;
+  const t = new Date(ref).getTime();
   if (isNaN(t)) return null;
   return Math.max(0, Math.floor((Date.now() - t) / 60_000));
 }
