@@ -52,7 +52,7 @@ function buildEventTimeline(records: SamLogRowWithReason[]): EventTimelineStep[]
   // existed, where Date_Time is the closest thing we have.
   timeline.push({
     step: 3,
-    label: 'DMC1 — Loading Scan',
+    label: 'DMC 1 — Loading Scan',
     type: 'checkpoint',
     timestamp: earliest.Loading_Time ?? earliest.Date_Time,
     status: 'OK',
@@ -62,9 +62,9 @@ function buildEventTimeline(records: SamLogRowWithReason[]): EventTimelineStep[]
   // Snap-ring branch — gated on Circlip_Time being stamped.
   if (!earliest.Circlip_Time && !isRejectionReason(earliest.Circlip_Rejection_Reason)) return timeline;
 
-  timeline.push({ step: 4, label: 'Gantry 1',                  type: 'intermediate' });
-  timeline.push({ step: 5, label: 'Snap Ring Assembly Station', type: 'intermediate' });
-  timeline.push({ step: 6, label: 'DMC2 — Barcode Scan',        type: 'intermediate' });
+  timeline.push({ step: 4, label: 'Anodizing Presence',         type: 'intermediate' });
+  timeline.push({ step: 5, label: 'Snap Ring Assembly',         type: 'intermediate' });
+  timeline.push({ step: 6, label: 'DMC 2 — Vision Inspection Station — Snap Ring', type: 'intermediate' });
 
   // A rejection reason is a fail even when Circlip_Result was never written —
   // reasons raised before the inspection completes (recipe/barcode mismatch,
