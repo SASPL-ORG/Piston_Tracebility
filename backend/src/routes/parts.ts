@@ -73,7 +73,7 @@ function buildEventTimeline(records: SamLogRowWithReason[]): EventTimelineStep[]
     earliest.Circlip_Result === 'FAIL' || isRejectionReason(earliest.Circlip_Rejection_Reason);
   timeline.push({
     step: 7,
-    label: 'Circlip Inspection',
+    label: 'Snap Ring Inspection',
     type: 'checkpoint',
     timestamp: earliest.Circlip_Time,
     status: circlipFail ? 'FAIL' : 'OK',
@@ -81,21 +81,19 @@ function buildEventTimeline(records: SamLogRowWithReason[]): EventTimelineStep[]
   });
 
   if (circlipFail) {
-    timeline.push({ step: 8, label: 'Circlip Rejection Conveyor', type: 'conditional' });
+    timeline.push({ step: 8, label: 'Snap Ring Rejection Conveyor', type: 'conditional' });
     return timeline;
   }
 
   // Ring branch — gated on the latest row having Ring_Time stamped.
   if (!latest.Ring_Time) return timeline;
 
-  timeline.push({ step: 9,  label: 'Ring Presence Sensor', type: 'intermediate' });
   timeline.push({
     step: 10,
     label: 'Ring Assembly Station',
     type: 'intermediate',
     substations: RING_ASSEMBLY_SUBSTATIONS,
   });
-  timeline.push({ step: 11, label: 'Ring Part Presence', type: 'intermediate' });
   timeline.push({ step: 12, label: 'DMC3 — Barcode Scan', type: 'intermediate' });
 
   const ringFail =
@@ -115,10 +113,22 @@ function buildEventTimeline(records: SamLogRowWithReason[]): EventTimelineStep[]
     return timeline;
   }
 
-  // Packed = Unloading_Time stamped on the latest row.
+  // Unloading — the part leaves the inspection cell (Unloading_Time stamped).
   if (latest.Unloading_Time) {
     timeline.push({
       step: 15,
+      label: 'Unloading Time',
+      type: 'checkpoint',
+      timestamp: latest.Unloading_Time,
+      status: 'OK',
+      reason: null,
+    });
+  }
+
+  // Packed = Unloading_Time stamped on the latest row.
+  if (latest.Unloading_Time) {
+    timeline.push({
+      step: 16,
       label: 'Packing Station',
       type: 'checkpoint',
       timestamp: latest.Unloading_Time,
