@@ -19,6 +19,25 @@ type SamLogRowWithReason = SamLogRecord & {
   Ring_Rejection_Reason?: string | null;
 };
 
+// A per-station completion event from dbo.Station_Events, captured live by
+// Node-RED at the DMC-bearing checkpoint stations. The timeline uses station
+// #6 (snap ring ASSEMBLY) — the one real checkpoint SAM_Log never recorded
+// (SAM_Log only tracks the two inspections, load and unload). Empty for
+// parts built before this capture existed, so the timeline degrades to its
+// SAM_Log-only view.
+interface StationEvent {
+  timestamp: string | null;
+  status: 'OK' | 'FAIL' | null;
+  reason: string | null;
+}
+
+interface StationEventRow {
+  Station_No: number;
+  Event_Time: string | null;
+  Result: string | null;
+  Reason: string | null;
+}
+
 const RING_ASSEMBLY_SUBSTATIONS = [
   'Expander Ring',
   'Bottom Ring',
@@ -39,7 +58,10 @@ const RING_ASSEMBLY_SUBSTATIONS = [
 // Earliest row carries the loading + circlip data (Ring_Count 0 or 1);
 // latest row carries the most recent ring + unload data. This handles
 // re-inspections — only the final state appears at event 13.
-function buildEventTimeline(records: SamLogRowWithReason[]): EventTimelineStep[] {
+function buildEventTimeline(
+  records: SamLogRowWithReason[],
+  stationEvents: Map<number, StationEvent>,
+): EventTimelineStep[] {
   const timeline: EventTimelineStep[] = [];
   if (records.length === 0) return timeline;
 
@@ -63,7 +85,25 @@ function buildEventTimeline(records: SamLogRowWithReason[]): EventTimelineStep[]
   if (!earliest.Circlip_Time && !isRejectionReason(earliest.Circlip_Rejection_Reason)) return timeline;
 
   timeline.push({ step: 4, label: 'Anodizing Presence',         type: 'intermediate' });
-  timeline.push({ step: 5, label: 'Snap Ring Assembly',         type: 'intermediate' });
+
+  // Snap ring ASSEMBLY — the one station SAM_Log doesn't record. If Node-RED
+  // logged a station-6 completion for this DMC, show its real timestamp +
+  // pass/fail; otherwise fall back to a plain intermediate marker (historical
+  // parts, or an in-progress part not yet past assembly).
+  const assembly = stationEvents.get(6);
+  if (assembly?.timestamp) {
+    timeline.push({
+      step: 5,
+      label: 'Snap Ring Assembly',
+      type: 'checkpoint',
+      timestamp: assembly.timestamp,
+      status: assembly.status === 'FAIL' ? 'FAIL' : 'OK',
+      reason: assembly.status === 'FAIL' ? assembly.reason : null,
+    });
+  } else {
+    timeline.push({ step: 5, label: 'Snap Ring Assembly', type: 'intermediate' });
+  }
+
   timeline.push({ step: 6, label: 'DMC 2 — Vision Inspection Station — Snap Ring', type: 'intermediate' });
 
   // A rejection reason is a fail even when Circlip_Result was never written —
@@ -178,6 +218,41 @@ async function fetchPartRecords(dmc: string): Promise<SamLogRecord[]> {
   return reduced.recordset as SamLogRecord[];
 }
 
+// Loads the live per-station completion events for this part (dbo.Station_Events,
+// written by Node-RED). Keyed by the stored DMC, which matches SAM_Log.DMC
+// exactly (same `]>.`-prefixed value). Returns a map station_no → latest event;
+// a later Id wins so re-runs resolve to the most recent completion. Station_Events
+// is optional infrastructure: a missing table or query error degrades to an empty
+// map (SAM_Log-only timeline) rather than failing the whole Part Trace.
+async function fetchStationEvents(
+  dmc: string | null | undefined,
+): Promise<Map<number, StationEvent>> {
+  const map = new Map<number, StationEvent>();
+  if (!dmc) return map;
+  try {
+    const pool = await getPool();
+    const result = await pool
+      .request()
+      .input('dmc', dmc)
+      .query(
+        `SELECT Station_No, Event_Time, Result, Reason
+         FROM dbo.Station_Events WHERE DMC = @dmc ORDER BY Id ASC`,
+      );
+    for (const r of result.recordset as StationEventRow[]) {
+      map.set(r.Station_No, {
+        // Event_Time is a server wall-clock string ('YYYY-MM-DD HH:mm:ss');
+        // the frontend's formatDateTime accepts the space separator as-is.
+        timestamp: r.Event_Time ?? null,
+        status: r.Result == null ? null : r.Result === 'OK' ? 'OK' : 'FAIL',
+        reason: r.Reason ?? null,
+      });
+    }
+  } catch {
+    // swallow — see note above.
+  }
+  return map;
+}
+
 // Loads PLC alarm edge events for this part. BatchID column on PLC_Alarms
 // carries the DMC of whatever piston was active when the alarm fired.
 async function fetchPartAlarms(dmc: string): Promise<AlarmEvent[]> {
@@ -215,6 +290,11 @@ export default async function partRoutes(app: FastifyInstance) {
       reply.status(404);
       return { error: `No records found for DMC: ${dmc}` };
     }
+
+    // Per-station events are keyed by the STORED DMC (records[0].DMC), which
+    // matches Station_Events exactly — the request param may be a raw scan that
+    // only matched via the separator-insensitive fallback.
+    const stationEvents = await fetchStationEvents(records[0].DMC);
 
     serializeDateTimeFields(records as unknown as Record<string, unknown>[]);
     const lastRow = records[records.length - 1];
@@ -254,7 +334,7 @@ export default async function partRoutes(app: FastifyInstance) {
       Circlip_Time: lastRow.Circlip_Time ?? circlipRow?.Circlip_Time ?? null,
     };
 
-    const event_timeline = buildEventTimeline(records as SamLogRowWithReason[]);
+    const event_timeline = buildEventTimeline(records as SamLogRowWithReason[], stationEvents);
     req.log.info(`[part-trace] dmc=${dmc} → ${event_timeline.length} events in timeline`);
 
     const response: PartTraceResponse = {
