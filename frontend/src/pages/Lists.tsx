@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { format } from 'date-fns';
+import { format, subDays, parseISO, startOfMonth } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
 import { Download, ExternalLink, RotateCw, RotateCcw } from 'lucide-react';
 import clsx from 'clsx';
 import DateRangePicker from '../components/DateRangePicker';
+import { getProductionDate } from '../lib/shifts';
 import Pagination from '../components/Pagination';
 import ResultBadge from '../components/ResultBadge';
 import StateBadge from '../components/StateBadge';
@@ -101,13 +102,17 @@ function matchingShift(from: string, to: string): ShiftScope {
 // DateRangePicker presets; falls back to a literal "from → to" range
 // for custom selections.
 function dateRangeLabel(from: string, to: string): string {
-  const today = format(new Date(), 'yyyy-MM-dd');
+  // Anchor on the production date (07:00 rollover) and mirror
+  // DateRangePicker's preset math exactly, so the label matches what the
+  // chips actually select — including before 07:00, when "today" is still
+  // the previous calendar date.
+  const today = getProductionDate();
   if (from === today && to === today) return 'Today';
-  const sevenAgo = format(new Date(Date.now() - 6 * 86_400_000), 'yyyy-MM-dd');
+  const sevenAgo = format(subDays(parseISO(today), 7), 'yyyy-MM-dd');
   if (from === sevenAgo && to === today) return '7 Days';
-  const thirtyAgo = format(new Date(Date.now() - 29 * 86_400_000), 'yyyy-MM-dd');
+  const thirtyAgo = format(subDays(parseISO(today), 30), 'yyyy-MM-dd');
   if (from === thirtyAgo && to === today) return '30 Days';
-  const monthStart = format(new Date(new Date().getFullYear(), new Date().getMonth(), 1), 'yyyy-MM-dd');
+  const monthStart = format(startOfMonth(parseISO(today)), 'yyyy-MM-dd');
   if (from === monthStart && to === today) return 'This Month';
   return `${from} → ${to}`;
 }
@@ -216,7 +221,9 @@ function formatAge(mins: number): string {
 
 export default function Lists() {
   const navigate = useNavigate();
-  const today = format(new Date(), 'yyyy-MM-dd');
+  // Production date (07:00 rollover), matching the Dashboard — so "Today" on
+  // both pages means the same production day, even in the 00:00–07:00 window.
+  const today = getProductionDate();
   // All filter state lives in sessionStorage so the operator's
   // selections survive navigating to Dashboard / Part Trace / Images
   // and back. Reset only happens when the user clicks "Reset filters",
@@ -441,7 +448,7 @@ export default function Lists() {
               ))}
             </select>
           </div>
-          <DateRangePicker from={from} to={to} plant={plant} plants={plants} onChange={handleDateChange} />
+          <DateRangePicker from={from} to={to} plant={plant} plants={plants} onChange={handleDateChange} todayOverride={getProductionDate()} />
         </div>
         {/* Shift + hour window. Clicking a shift fills the From/To inputs
             with that shift's bounds; the operator can then narrow further
