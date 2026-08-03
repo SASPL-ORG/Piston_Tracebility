@@ -23,8 +23,10 @@ interface AdminAuthContextValue {
   isAdmin: boolean;
   // Run `action` if currently authed; otherwise pop the login modal,
   // and only run on successful submit. Cancels (no-op) if the operator
-  // dismisses the modal.
-  requireAdmin: (action: () => void) => void;
+  // dismisses the modal. Pass { force: true } to ALWAYS prompt for
+  // credentials even inside a live session — used for sensitive actions
+  // like revealing hidden data, where a deliberate re-auth is required.
+  requireAdmin: (action: () => void, opts?: { force?: boolean }) => void;
   // Imperatively clears the session (mostly for the "Log out" affordance,
   // which we don't render today but might soon).
   logout: () => void;
@@ -57,8 +59,8 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
   const isAdmin = authedUntil !== null && Date.now() < authedUntil;
 
   const requireAdmin = useCallback(
-    (action: () => void) => {
-      if (authedUntil !== null && Date.now() < authedUntil) {
+    (action: () => void, opts?: { force?: boolean }) => {
+      if (!opts?.force && authedUntil !== null && Date.now() < authedUntil) {
         action();
         return;
       }
@@ -152,8 +154,8 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
               <h2 className="text-lg font-semibold text-gray-900">Admin login required</h2>
             </div>
             <p className="text-xs text-gray-500">
-              This action affects the Tool Life configuration. Enter the
-              administrator credentials to continue.
+              This is a protected action. Enter the administrator credentials
+              to continue.
             </p>
 
             <div className="space-y-3">
