@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSessionState } from '../lib/useSessionState';
 import { format } from 'date-fns';
+import DemoModeControl from '../components/DemoModeControl';
 import {
   Activity,
   AlertTriangle,
@@ -191,14 +192,20 @@ export default function MachineStatus() {
             </span>
           )}
         </div>
-        <button
-          onClick={loadData}
-          disabled={loading}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
-        >
-          <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Global demo-mode toggle lives ONLY here (Machine Status). Hides /
+              reveals all historical data across the app; reveal needs a fresh
+              admin login. */}
+          <DemoModeControl />
+          <button
+            onClick={loadData}
+            disabled={loading}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Filter bar — same idioms as Lists */}

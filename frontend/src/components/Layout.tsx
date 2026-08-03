@@ -1,10 +1,8 @@
 import { ReactNode, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, List, Search, Image, Activity, Wrench, Database, Package, Menu, X, EyeOff } from 'lucide-react';
+import { LayoutDashboard, List, Search, Image, Activity, Wrench, Database, Package, Menu, X } from 'lucide-react';
 import clsx from 'clsx';
 import { useToolLife } from '../lib/toolLife';
-import { useHideState } from '../lib/hideState';
-import { useAdminAuth } from '../lib/adminAuth';
 
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -21,8 +19,6 @@ export default function Layout({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { activeAlerts } = useToolLife();
   const alertCount = activeAlerts.length;
-  const { hidden, hide, reveal } = useHideState();
-  const { requireAdmin } = useAdminAuth();
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -95,31 +91,6 @@ export default function Layout({ children }: { children: ReactNode }) {
             {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
           <h2 className="text-lg font-semibold text-slate-800">Piston Traceability</h2>
-
-          {/* Demo-mode control — reversible, display-only hide of historical
-              data. Hide requires the admin login; the "Demo mode" button
-              reveals and forces a FRESH credential entry (force: true) so data
-              can never be restored by a stray click. */}
-          <div className="ml-auto">
-            {!hidden ? (
-              <button
-                onClick={() => requireAdmin(() => void hide())}
-                className="flex items-center justify-center p-1.5 text-slate-500 border border-slate-200 rounded-md hover:bg-slate-100 hover:text-slate-700 transition-colors"
-                aria-label="Hide data (demo mode)"
-              >
-                <EyeOff size={16} />
-              </button>
-            ) : (
-              <button
-                onClick={() => requireAdmin(() => void reveal(), { force: true })}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-700 bg-amber-100 border border-amber-300 rounded-md hover:bg-amber-200 transition-colors"
-                title="Exit demo mode and restore all data (admin login required)"
-              >
-                <EyeOff size={14} />
-                Demo
-              </button>
-            )}
-          </div>
         </header>
 
         {/* Page content */}
