@@ -105,7 +105,6 @@ export default function Layout({ children }: { children: ReactNode }) {
               <button
                 onClick={() => requireAdmin(() => void hide())}
                 className="flex items-center justify-center p-1.5 text-slate-500 border border-slate-200 rounded-md hover:bg-slate-100 hover:text-slate-700 transition-colors"
-                title="Temporarily hide all existing data (demo mode). Nothing is deleted."
                 aria-label="Hide data (demo mode)"
               >
                 <EyeOff size={16} />
@@ -117,7 +116,7 @@ export default function Layout({ children }: { children: ReactNode }) {
                 title="Exit demo mode and restore all data (admin login required)"
               >
                 <EyeOff size={14} />
-                Demo mode
+                Demo
               </button>
             )}
           </div>
