@@ -122,15 +122,6 @@ export default function Layout({ children }: { children: ReactNode }) {
           </div>
         </header>
 
-        {/* While hidden: a minimal symbol-only indicator bar — no text, no
-            reveal button. Reveal lives on the "Demo mode" button above and
-            requires a fresh admin login. */}
-        {hidden && (
-          <div className="bg-amber-50 border-b border-amber-300 px-4 py-2 flex items-center justify-center lg:px-6">
-            <EyeOff size={18} className="text-amber-600" />
-          </div>
-        )}
-
         {/* Page content */}
         <main className="flex-1 overflow-auto bg-gray-50 p-4 lg:p-6">
           {children}
