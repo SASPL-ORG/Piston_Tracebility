@@ -1,4 +1,5 @@
 import sql from 'mssql';
+import { getHideBeforeCached } from '../utils/hideState.js';
 
 // PartState has two stages along the "passed inspection" axis:
 //   COMPLETED — line says "all stations passed + part unloaded". This is
@@ -319,6 +320,13 @@ export function stripDmcSeparators(s: string): string {
 // Use as: `${cte} SELECT ... FROM latest l INNER JOIN per_dmc p ON p.DMC = l.DMC ...`
 export function buildLatestPerDmcCte(extraConditions: string[]): string {
   const conds = ['DMC IS NOT NULL', ...extraConditions];
+  // "Demo hide" cutoff — reversible, display-only. When set, every read that
+  // flows through this CTE (Dashboard + Lists) hides rows dated before the
+  // cutoff. The value is strictly validated ('YYYY-MM-DD HH:mm:ss') in
+  // hideState, so inlining it as a literal here is injection-safe. Clearing
+  // the cutoff (reveal) makes all history reappear — nothing is ever deleted.
+  const hideBefore = getHideBeforeCached();
+  if (hideBefore) conds.push(`Date_Time >= '${hideBefore}'`);
   const where = `WHERE ${conds.join(' AND ')}`;
   // per_dmc folds in the snap-ring recovery aggregates so the Lists page
   // can render Circlip_Result/Time for re-inspected parts without an

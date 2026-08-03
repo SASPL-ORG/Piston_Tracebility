@@ -16,6 +16,7 @@ import LicenseActivation from './pages/LicenseActivation';
 import { fetchLicenseStatus } from './lib/api';
 import { ToolLifeProvider } from './lib/toolLife';
 import { AdminAuthProvider } from './lib/adminAuth';
+import { HideStateProvider } from './lib/hideState';
 
 export default function App() {
   const [licensed, setLicensed] = useState<boolean | null>(null);
@@ -52,6 +53,7 @@ export default function App() {
   // own clean @page setup.
   return (
     <AdminAuthProvider>
+      <HideStateProvider>
       <ToolLifeProvider>
         <Routes>
           <Route path="/packing/print/:packingNumber" element={<PackingPrintLabel />} />
@@ -77,6 +79,7 @@ export default function App() {
           />
         </Routes>
       </ToolLifeProvider>
+      </HideStateProvider>
     </AdminAuthProvider>
   );
 }

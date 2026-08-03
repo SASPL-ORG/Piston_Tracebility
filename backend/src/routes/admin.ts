@@ -1,5 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { timingSafeEqual } from 'crypto';
+import { getHideBefore, setHideBefore, nowCutoff } from '../utils/hideState.js';
+import { clearResponseCache } from '../utils/responseCache.js';
 
 // Admin password verification — used by the Tool Life page on the
 // Maintenance screen to gate edit/reset actions. Credentials live in
@@ -58,4 +60,37 @@ export default async function adminRoutes(app: FastifyInstance) {
       return { ok: false };
     },
   );
+
+  // ---------------------------------------------------------------------------
+  // "Demo hide" — reversible, display-only clearing of the dashboard.
+  // ---------------------------------------------------------------------------
+  // hide:   set the cutoff to now -> Dashboard/Lists/Part Trace show only data
+  //         from this instant forward. New production still appears live.
+  // reveal: clear the cutoff -> ALL history reappears instantly.
+  // Nothing is ever deleted; this only changes what the read queries show.
+  //
+  // These mutations are gated in the UI by the same admin login the Tool Life
+  // actions use (requireAdmin) — matching this codebase's client-side gating
+  // model where the /admin/verify check guards the control and the mutation
+  // endpoint itself trusts the single-host LAN deployment.
+
+  // Read the current toggle state — drives the app-wide "data hidden" banner.
+  app.get('/admin/dashboard/state', async () => {
+    const hideBefore = await getHideBefore();
+    return { hidden: hideBefore !== null, hideBefore };
+  });
+
+  app.post('/admin/dashboard/hide', async (req) => {
+    const hideBefore = await setHideBefore(nowCutoff());
+    clearResponseCache();
+    req.log.warn(`[admin] dashboard HIDE — cutoff=${hideBefore}`);
+    return { ok: true, hidden: true, hideBefore };
+  });
+
+  app.post('/admin/dashboard/reveal', async (req) => {
+    await setHideBefore(null);
+    clearResponseCache();
+    req.log.warn('[admin] dashboard REVEAL — all history visible again');
+    return { ok: true, hidden: false, hideBefore: null };
+  });
 }

@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { getPool } from '../db/connection.js';
 import { classifyState, hasCirclipRejection, isRejectionReason, stripDmcSeparators, DMC_SEPARATOR_CHARS } from '../db/state.js';
+import { getHideBeforeCached } from '../utils/hideState.js';
 import { serializeDateTime, serializeDateTimeFields } from '../db/datetime.js';
 import { renderPartTracePdf, deriveSerializedRecords } from '../reports/partTracePdf.js';
 import type {
@@ -188,12 +189,18 @@ async function fetchPartRecords(dmc: string): Promise<SamLogRecord[]> {
   const pool = await getPool();
   const order = 'ORDER BY ISNULL(Ring_Count, 0) ASC, Date_Time ASC';
 
+  // "Demo hide" cutoff — while active, a part dated before the cutoff reads as
+  // not-found here (→ 404), keeping Part Trace consistent with the hidden
+  // Dashboard/Lists. Validated 'YYYY-MM-DD HH:mm:ss' so the literal is safe.
+  const hideBefore = getHideBeforeCached();
+  const hide = hideBefore ? ` AND Date_Time >= '${hideBefore}'` : '';
+
   // Fast path: exact match on the indexed DMC column. Part Trace passes the
   // stored key verbatim, so this is the common case and stays sargable.
   const exact = await pool
     .request()
     .input('dmc', dmc)
-    .query(`SELECT * FROM dbo.SAM_Log WHERE DMC = @dmc ${order}`);
+    .query(`SELECT * FROM dbo.SAM_Log WHERE DMC = @dmc${hide} ${order}`);
   if (exact.recordset.length > 0) return exact.recordset as SamLogRecord[];
 
   // Fallback: separator-insensitive match. A packing-station scan arrives as
@@ -212,7 +219,7 @@ async function fetchPartRecords(dmc: string): Promise<SamLogRecord[]> {
     .input('seps', DMC_SEPARATOR_CHARS)
     .query(
       `SELECT * FROM dbo.SAM_Log
-       WHERE REPLACE(TRANSLATE(DMC, @seps, REPLICATE(CHAR(1), LEN(@seps))), CHAR(1), '') = @norm
+       WHERE REPLACE(TRANSLATE(DMC, @seps, REPLICATE(CHAR(1), LEN(@seps))), CHAR(1), '') = @norm${hide}
        ${order}`,
     );
   return reduced.recordset as SamLogRecord[];

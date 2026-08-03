@@ -15,6 +15,7 @@ import adminRoutes from './routes/admin.js';
 import machineStatusRoutes from './routes/machineStatus.js';
 import packingRoutes from './routes/packing.js';
 import { recordCacheOnSend } from './utils/responseCache.js';
+import { initHideState } from './utils/hideState.js';
 import { isLicenseActive } from './license/license.js';
 import { getPool, closePool, setConnectionLogger } from './db/connection.js';
 import { startImageSubsystem, stopImageSubsystem } from './images/index.js';
@@ -27,6 +28,10 @@ const app = Fastify({
 
 async function start() {
   await app.register(cors, { origin: true });
+
+  // Load the reversible "demo hide" cutoff (display-only; nothing deleted) and
+  // keep it refreshed so the query path can read it synchronously.
+  initHideState();
 
   // Response cache — pairs with cacheReads() preHandlers on hot GETs.
   // The preHandler tags the request; this onSend writes the response

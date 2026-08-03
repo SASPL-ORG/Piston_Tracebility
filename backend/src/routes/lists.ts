@@ -11,6 +11,7 @@ import {
   isRejectionReason,
 } from '../db/state.js';
 import { cacheReads } from '../utils/responseCache.js';
+import { hideCutoffCond } from '../utils/hideState.js';
 import { serializeDateTimeFields } from '../db/datetime.js';
 import type {
   ListFailureItem,
@@ -574,7 +575,11 @@ export default async function listRoutes(app: FastifyInstance) {
       // leaves Circlip_Result NULL. Filtering on Result='FAIL' alone hid
       // those parts from this drill-down entirely.
       const circlipReject = `(Circlip_Result = 'FAIL' OR ${rejectionReasonSql('Circlip_Rejection_Reason')})`;
-      const where = [...conds, circlipReject, timeWhereRaw].join(' AND ');
+      // Respect the "demo hide" cutoff — this is a direct SAM_Log query, so it
+      // doesn't inherit the cutoff that buildLatestPerDmcCte injects elsewhere.
+      const where = [...conds, circlipReject, timeWhereRaw, hideCutoffCond()]
+        .filter(Boolean)
+        .join(' AND ');
       const r = await request.query(`
         SELECT TOP (${ROW_CAP + 1})
           Date_Time, Plant_Id, DMC, Circlip_Rejection_Reason AS rejection_reason

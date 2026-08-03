@@ -18,6 +18,12 @@ interface CacheEntry {
 const store = new Map<string, CacheEntry>();
 const MAX_ENTRIES = 500;
 
+// Drop every cached response. Called when the "demo hide" cutoff is toggled so
+// hide/reveal takes effect immediately instead of after the TTL expires.
+export function clearResponseCache(): void {
+  store.clear();
+}
+
 function evictExpired(now: number): void {
   if (store.size < MAX_ENTRIES) return;
   for (const [k, v] of store) {
