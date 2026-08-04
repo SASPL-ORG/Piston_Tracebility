@@ -48,6 +48,15 @@ export function nowCutoff(): string {
   );
 }
 
+// Fixed "demo" cutoff. Clicking Demo hides everything dated BEFORE this instant,
+// so the app shows production from 1 Aug 2026 onward — and nothing older. Kept
+// as a stable constant (env-overridable) rather than "now" so the demo window
+// is predictable. Falls back to the hard default if the env value is malformed.
+export function demoCutoff(): string {
+  const v = (process.env.DEMO_HIDE_CUTOFF ?? '2026-08-01 00:00:00').trim();
+  return CUTOFF_RE.test(v) ? v : '2026-08-01 00:00:00';
+}
+
 async function loadFromDisk(): Promise<void> {
   try {
     const raw = await fs.readFile(STATE_FILE, 'utf8');

@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { timingSafeEqual } from 'crypto';
-import { getHideBefore, setHideBefore, nowCutoff } from '../utils/hideState.js';
+import { getHideBefore, setHideBefore, demoCutoff } from '../utils/hideState.js';
 import { clearResponseCache } from '../utils/responseCache.js';
 
 // Admin password verification — used by the Tool Life page on the
@@ -81,7 +81,9 @@ export default async function adminRoutes(app: FastifyInstance) {
   });
 
   app.post('/admin/dashboard/hide', async (req) => {
-    const hideBefore = await setHideBefore(nowCutoff());
+    // Demo mode hides everything before the fixed 1-Aug-2026 cutoff (not "now"),
+    // so it always shows production from 1 Aug onward.
+    const hideBefore = await setHideBefore(demoCutoff());
     clearResponseCache();
     req.log.warn(`[admin] dashboard HIDE — cutoff=${hideBefore}`);
     return { ok: true, hidden: true, hideBefore };
