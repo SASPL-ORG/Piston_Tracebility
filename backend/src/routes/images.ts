@@ -7,6 +7,7 @@ import { getImageConfig } from '../images/config.js';
 import { serializeDateTime } from '../db/datetime.js';
 import { deleteImageRow } from '../images/db.js';
 import { stripDmcSeparators, DMC_SEPARATOR_CHARS } from '../db/state.js';
+import { getHideBeforeCached } from '../utils/hideState.js';
 import type {
   PartImagesResponse,
   PartImagesSummaryResponse,
@@ -37,12 +38,18 @@ function expectedFor(type: 'CIRCLIP' | 'RING'): number {
 // which happens whenever a URL loses the hyphen.
 async function resolveCanonicalDmc(dmc: string): Promise<string | null> {
   const pool = await getPool();
+  // "Demo hide" cutoff — while active, a part dated before the cutoff is not a
+  // resolvable part here either, so the Images page hides it just like Part
+  // Trace / Lists (keeps demo mode consistent). Validated 'YYYY-MM-DD HH:mm:ss'
+  // so the literal is safe.
+  const hideBefore = getHideBeforeCached();
+  const hide = hideBefore ? ` AND Date_Time >= '${hideBefore}'` : '';
 
   // 1. Exact match first — the common case.
   const exact = await pool
     .request()
     .input('dmc', dmc)
-    .query(`SELECT TOP 1 DMC FROM dbo.SAM_Log WITH (NOLOCK) WHERE DMC = @dmc`);
+    .query(`SELECT TOP 1 DMC FROM dbo.SAM_Log WITH (NOLOCK) WHERE DMC = @dmc${hide}`);
   if (exact.recordset.length > 0) return exact.recordset[0].DMC ?? dmc;
 
   // 2. Separator-insensitive fallback — strip separators from both sides
@@ -58,7 +65,7 @@ async function resolveCanonicalDmc(dmc: string): Promise<string | null> {
     .input('seps', DMC_SEPARATOR_CHARS)
     .query(`
       SELECT TOP 1 DMC FROM dbo.SAM_Log WITH (NOLOCK)
-      WHERE REPLACE(TRANSLATE(DMC, @seps, REPLICATE(CHAR(1), LEN(@seps))), CHAR(1), '') = @norm
+      WHERE REPLACE(TRANSLATE(DMC, @seps, REPLICATE(CHAR(1), LEN(@seps))), CHAR(1), '') = @norm${hide}
     `);
   return reduced.recordset.length > 0 ? reduced.recordset[0].DMC ?? null : null;
 }
@@ -220,7 +227,11 @@ export default async function imageRoutes(app: FastifyInstance) {
     }
 
     const pool = await getPool();
-    // Only serve the file if its DMC is a real part in SAM_Log.
+    // Only serve the file if its DMC is a real part in SAM_Log. Master images
+    // (calibration/reference) are always servable; part images additionally
+    // respect the "demo hide" cutoff so hidden parts' bytes aren't served.
+    const hideBefore = getHideBeforeCached();
+    const hide = hideBefore ? ` AND s.Date_Time >= '${hideBefore}'` : '';
     const result = await pool
       .request()
       .input('id', id)
@@ -231,7 +242,7 @@ export default async function imageRoutes(app: FastifyInstance) {
           AND i.pending_match = 0
           AND (
             i.is_master = 1
-            OR EXISTS (SELECT 1 FROM dbo.SAM_Log s WITH (NOLOCK) WHERE s.DMC = i.DMC)
+            OR EXISTS (SELECT 1 FROM dbo.SAM_Log s WITH (NOLOCK) WHERE s.DMC = i.DMC${hide})
           )
       `);
 
