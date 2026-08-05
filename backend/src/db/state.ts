@@ -307,6 +307,24 @@ export function stripDmcSeparators(s: string): string {
   // eslint-disable-next-line no-control-regex
   return s.replace(/[\x00-\x20\x7f.\-]/g, '');
 }
+
+// Rebuild the CANONICAL stored key from a raw ISO/IEC 15434 scan, the way
+// Node-RED stored it at loading: RS (0x1E) -> '.', GS (0x1D) -> '-', drop the
+// remaining control bytes (EOT etc.) and any trailing separators. This lets a
+// raw packing/Part-Trace scan hit the indexed DMC column with an EXACT match
+// instead of the non-sargable REPLACE(TRANSLATE(...)) full-table scan — turning
+// a multi-second lookup into a sub-millisecond one. If the transform ever fails
+// to match (Node-RED changes its storage), callers keep the separator-
+// insensitive scan as a correctness fallback, so this can only ever speed
+// things up, never break a match.
+export function canonicalizeDmcScan(raw: string): string {
+  // eslint-disable-next-line no-control-regex
+  let s = raw.replace(/\x1e/g, '.').replace(/\x1d/g, '-');
+  // eslint-disable-next-line no-control-regex
+  s = s.replace(/[\x00-\x1f\x7f]/g, ''); // strip remaining control bytes
+  s = s.replace(/[.\-\s]+$/, ''); // drop trailing separators / whitespace
+  return s;
+}
 // Returns a CTE prefix that yields:
 //   filtered  - rows passing the SAM_Log filter
 //   per_dmc   - one row per DMC: DMC, max_ring_count, has_circlip_fail,

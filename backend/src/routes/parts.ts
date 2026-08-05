@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { getPool } from '../db/connection.js';
-import { classifyState, hasCirclipRejection, isRejectionReason, stripDmcSeparators, DMC_SEPARATOR_CHARS } from '../db/state.js';
+import { classifyState, hasCirclipRejection, isRejectionReason, stripDmcSeparators, canonicalizeDmcScan, DMC_SEPARATOR_CHARS } from '../db/state.js';
 import { getHideBeforeCached } from '../utils/hideState.js';
 import { serializeDateTime, serializeDateTimeFields } from '../db/datetime.js';
 import { renderPartTracePdf, deriveSerializedRecords } from '../reports/partTracePdf.js';
@@ -202,6 +202,17 @@ async function fetchPartRecords(dmc: string): Promise<SamLogRecord[]> {
     .input('dmc', dmc)
     .query(`SELECT * FROM dbo.SAM_Log WHERE DMC = @dmc${hide} ${order}`);
   if (exact.recordset.length > 0) return exact.recordset as SamLogRecord[];
+
+  // Fast path: rebuild the canonical stored key from a raw scan and exact-match
+  // the indexed DMC column, before the non-sargable separator-insensitive scan.
+  const canonical = canonicalizeDmcScan(dmc);
+  if (canonical && canonical !== dmc) {
+    const canon = await pool
+      .request()
+      .input('dmc', canonical)
+      .query(`SELECT * FROM dbo.SAM_Log WHERE DMC = @dmc${hide} ${order}`);
+    if (canon.recordset.length > 0) return canon.recordset as SamLogRecord[];
+  }
 
   // Fallback: separator-insensitive match. A packing-station scan arrives as
   // the raw ISO/IEC 15434 envelope (control bytes intact) while the stored key

@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { getPool } from '../db/connection.js';
-import { classifyState, hasCirclipRejection, stripDmcSeparators, DMC_SEPARATOR_CHARS } from '../db/state.js';
+import { classifyState, hasCirclipRejection, stripDmcSeparators, canonicalizeDmcScan, DMC_SEPARATOR_CHARS } from '../db/state.js';
 import { serializeDateTime } from '../db/datetime.js';
 import { classifyShift, type ShiftId } from '../config/shifts.js';
 import type { SamLogRecord } from '../types/index.js';
@@ -31,6 +31,19 @@ async function fetchByScan(scan: string): Promise<SamLogRecord[]> {
     .input('dmc', scan)
     .query(`SELECT * FROM dbo.SAM_Log WHERE DMC = @dmc ${order}`);
   if (exact.recordset.length > 0) return exact.recordset as SamLogRecord[];
+
+  // FAST PATH: rebuild the canonical stored key from the raw envelope and
+  // exact-match the indexed DMC column. This is how the loading node stored it,
+  // so it lands directly — replacing the multi-second full-table scan below on
+  // every packing scan. The scan fallback stays as a correctness safety net.
+  const canonical = canonicalizeDmcScan(scan);
+  if (canonical && canonical !== scan) {
+    const canon = await pool
+      .request()
+      .input('dmc', canonical)
+      .query(`SELECT * FROM dbo.SAM_Log WHERE DMC = @dmc ${order}`);
+    if (canon.recordset.length > 0) return canon.recordset as SamLogRecord[];
+  }
 
   const norm = stripDmcSeparators(scan);
   if (!norm) return [];
