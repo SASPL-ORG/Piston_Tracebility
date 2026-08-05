@@ -26,11 +26,11 @@ export default function DemoModeControl() {
   return (
     <button
       onClick={() => requireAdmin(() => void reveal(), { force: true })}
-      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-700 bg-amber-100 border border-amber-300 rounded-md hover:bg-amber-200 transition-colors"
+      className="flex items-center justify-center p-1.5 text-amber-700 bg-amber-100 border border-amber-300 rounded-md hover:bg-amber-200 transition-colors"
       title="Exit demo mode and restore all data (admin login required)"
+      aria-label="Exit demo mode (admin login required)"
     >
-      <EyeOff size={14} />
-      Demo
+      <EyeOff size={16} />
     </button>
   );
 }
