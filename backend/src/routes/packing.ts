@@ -352,6 +352,74 @@ async function ensurePackingNumberColumn(): Promise<boolean> {
   }
 }
 
+// Rebuild the in-memory pack-progress + history from the permanent
+// Packed_Log_TEST on first use, so a backend RESTART never resets the pallet
+// counts (the bug the code's earlier comments anticipated). Runs once;
+// idempotent; needs the Packing_Number column. Any failure is non-fatal — it
+// just falls back to the previous live-only behaviour.
+let packingSeeded = false;
+let packingSeedInFlight: Promise<void> | null = null;
+async function ensurePackingSeeded(): Promise<void> {
+  if (packingSeeded) return;
+  if (packingSeedInFlight) return packingSeedInFlight;
+  packingSeedInFlight = (async () => {
+    try {
+      const hasCol = await ensurePackingNumberColumn();
+      if (!hasCol) { packingSeeded = true; return; }
+      const pool = await getPool();
+      // Current pallet per grade = the highest Packing_Number for that P_Code,
+      // and how many OK packs it holds.
+      const grp = (await pool.request().query(`
+        SELECT P_Code, Packing_Number, COUNT(*) AS cnt
+        FROM dbo.Packed_Log_TEST WITH (NOLOCK)
+        WHERE ISNULL(Is_Reject,0)=0 AND Packing_Number IS NOT NULL AND P_Code IS NOT NULL
+        GROUP BY P_Code, Packing_Number
+      `)).recordset as Array<{ P_Code: string; Packing_Number: string; cnt: number }>;
+      const latest: Record<string, { num: string; cnt: number }> = {};
+      let maxSeqToday = 0;
+      const { dateKey, ddmmyy } = todayStringsServer();
+      for (const r of grp) {
+        const g = String(r.P_Code); const num = String(r.Packing_Number); const cnt = Number(r.cnt);
+        if (!latest[g] || num > latest[g].num) latest[g] = { num, cnt };
+        if (num.startsWith(ddmmyy)) {
+          const nn = parseInt(num.slice(6), 10);
+          if (Number.isFinite(nn) && nn > maxSeqToday) maxSeqToday = nn;
+        }
+      }
+      for (const [g, v] of Object.entries(latest)) {
+        packingProgress.byGrade[g] = { packed: v.cnt, packingNumber: v.num };
+      }
+      packingProgress.dailyDate = dateKey;
+      packingProgress.dailySeq = maxSeqToday;
+      // History for the pallet drill-down.
+      const hist = (await pool.request().query(`
+        SELECT TOP (${MAX_HISTORY}) DMC, P_Code AS grade,
+               CONVERT(varchar(33), Packed_At, 126) AS packedAt, Packing_Number
+        FROM dbo.Packed_Log_TEST WITH (NOLOCK)
+        WHERE ISNULL(Is_Reject,0)=0 AND Packing_Number IS NOT NULL
+        ORDER BY Packed_At ASC
+      `)).recordset as Array<{ DMC: string; grade: string; packedAt: string; Packing_Number: string }>;
+      packingHistory.length = 0;
+      for (const h of hist) {
+        packingHistory.push({
+          dmc: String(h.DMC), grade: String(h.grade || ''),
+          packedAt: String(h.packedAt), packingNumber: String(h.Packing_Number),
+        });
+      }
+      packingSeeded = true;
+      // eslint-disable-next-line no-console
+      console.log(`[packing] seeded from Packed_Log_TEST — grades=${Object.keys(latest).length}, history=${packingHistory.length}`);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('[packing] seed from Packed_Log_TEST failed: ' + (err as Error).message);
+      packingSeeded = true; // don't retry-loop; fall back to live-only counting
+    } finally {
+      packingSeedInFlight = null;
+    }
+  })();
+  return packingSeedInFlight;
+}
+
 // Predict the packing number the upcoming pack will land under, without
 // mutating state. Used so the INSERT into Packed_Log_TEST can include
 // the Packing_Number BEFORE recordServerPack actually commits it.
@@ -551,6 +619,7 @@ export default async function packingRoutes(app: FastifyInstance) {
 
   // -- PACK (write) -------------------------------------------------------
   app.post<{ Body: ScanBody }>('/pack', async (req) => {
+    await ensurePackingSeeded(); // rebuild pallet counts from DB before counting a new pack
     const scan = req.body?.scan ?? '';
     const reject = req.body?.reject === true;
     try {
@@ -720,13 +789,16 @@ export default async function packingRoutes(app: FastifyInstance) {
 
   // Per-grade pack progress (same shape the Zebra uses) for the Live
   // Mirror page. Cheap; the page polls this on a short interval.
-  app.get('/packing/progress', async () => ({
-    byGrade: packingProgress.byGrade,
-    dailySeq: packingProgress.dailySeq,
-    dailyDate: packingProgress.dailyDate,
-    palletCapacity: PALLET_CAPACITY,
-    binCapacity: BIN_CAPACITY,
-  }));
+  app.get('/packing/progress', async () => {
+    await ensurePackingSeeded();
+    return {
+      byGrade: packingProgress.byGrade,
+      dailySeq: packingProgress.dailySeq,
+      dailyDate: packingProgress.dailyDate,
+      palletCapacity: PALLET_CAPACITY,
+      binCapacity: BIN_CAPACITY,
+    };
+  });
 
   // Packing history — one entry per packing number seen in this
   // session, with the count of parts packed under it and the bracketing
@@ -745,6 +817,7 @@ export default async function packingRoutes(app: FastifyInstance) {
       time_to?: string;
     };
   }>('/packing/history', async (req) => {
+    await ensurePackingSeeded();
     const { from, to, shift, time_from, time_to } = req.query;
 
     // Set of currently-active packing numbers for the History UI's
@@ -982,6 +1055,7 @@ export default async function packingRoutes(app: FastifyInstance) {
   app.get<{ Params: { packingNumber: string } }>(
     '/packing/history/:packingNumber',
     async (req) => {
+      await ensurePackingSeeded();
       const num = req.params.packingNumber;
 
       // Recovered-pallet drill-in. ID shape: R-DDMMYY-<P_Code>. Parse
@@ -1057,6 +1131,7 @@ export default async function packingRoutes(app: FastifyInstance) {
   app.post<{ Params: { packingNumber: string } }>(
     '/packing/complete/:packingNumber',
     async (req) => {
+      await ensurePackingSeeded();
       const num = req.params.packingNumber;
       let foundGrade: string | null = null;
       for (const [pCode, state] of Object.entries(packingProgress.byGrade)) {
@@ -1139,6 +1214,19 @@ export default async function packingRoutes(app: FastifyInstance) {
       for (const row of r.recordset as { Result: string; Cnt: number }[]) {
         stats[row.Result] = row.Cnt;
       }
+      // PACKED_OK from the AUTHORITATIVE permanent pack log, not the event
+      // mirror — the mirror silently drops events during backend downtime
+      // (e.g. a restart), which undercounts "Packed Today". Packed_Log_TEST
+      // records every OK pack, so it's the true count.
+      try {
+        const ok = await pool.request().query(`
+          SELECT COUNT(*) AS cnt FROM dbo.Packed_Log_TEST WITH (NOLOCK)
+          WHERE ISNULL(Is_Reject,0) = 0
+            AND CAST(Packed_At AT TIME ZONE 'UTC' AT TIME ZONE 'India Standard Time' AS DATE)
+              = CAST(SYSUTCDATETIME() AT TIME ZONE 'UTC' AT TIME ZONE 'India Standard Time' AS DATE)
+        `);
+        stats.PACKED_OK = Number(ok.recordset[0]?.cnt ?? stats.PACKED_OK ?? 0);
+      } catch { /* keep the mirror's PACKED_OK if the pack log read fails */ }
       return { source: 'db', stats };
     } catch (err) {
       req.log.warn('[packing] today-stats DB fallback: ' + (err as Error).message);
