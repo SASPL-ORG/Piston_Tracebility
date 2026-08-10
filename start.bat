@@ -31,6 +31,9 @@ echo.
 echo Creating data directories...
 if not exist "data\exports" mkdir "data\exports"
 if not exist "data\logs" mkdir "data\logs"
+REM Image integration host paths — bind-mounted into the backend container.
+if not exist "D:\Keyence - CVX" mkdir "D:\Keyence - CVX"
+if not exist "D:\Records Actual" mkdir "D:\Records Actual"
 echo.
 
 echo Building and starting containers...

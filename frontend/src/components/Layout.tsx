@@ -1,18 +1,24 @@
 import { ReactNode, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, List, Search, Image, Wrench, Menu, X } from 'lucide-react';
+import { LayoutDashboard, List, Search, Image, Activity, Wrench, Database, Package, Menu, X } from 'lucide-react';
 import clsx from 'clsx';
+import { useToolLife } from '../lib/toolLife';
 
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/lists', label: 'Lists', icon: List },
   { to: '/part-trace', label: 'Part Trace', icon: Search },
+  { to: '/packing-live', label: 'Packing', icon: Package },
   { to: '/images', label: 'Images', icon: Image },
+  { to: '/machine-status', label: 'Machine Status', icon: Activity },
   { to: '/maintenance', label: 'Maintenance', icon: Wrench },
+  { to: '/master-data', label: 'Master Data', icon: Database },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { activeAlerts } = useToolLife();
+  const alertCount = activeAlerts.length;
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -40,24 +46,32 @@ export default function Layout({ children }: { children: ReactNode }) {
 
         {/* Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-1">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              onClick={() => setSidebarOpen(false)}
-              className={({ isActive }) =>
-                clsx(
-                  'flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors',
-                  isActive
-                    ? 'bg-slate-700/60 text-white'
-                    : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-                )
-              }
-            >
-              <item.icon size={20} />
-              {item.label}
-            </NavLink>
-          ))}
+          {navItems.map((item) => {
+            const showBadge = item.to === '/maintenance' && alertCount > 0;
+            return (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                onClick={() => setSidebarOpen(false)}
+                className={({ isActive }) =>
+                  clsx(
+                    'flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors',
+                    isActive
+                      ? 'bg-slate-700/60 text-white'
+                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  )
+                }
+              >
+                <item.icon size={20} />
+                <span className="flex-1">{item.label}</span>
+                {showBadge && (
+                  <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center">
+                    {alertCount > 9 ? '9+' : alertCount}
+                  </span>
+                )}
+              </NavLink>
+            );
+          })}
         </nav>
 
         {/* Footer */}

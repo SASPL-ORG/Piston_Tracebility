@@ -1,12 +1,31 @@
 import { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Search, Clock, CheckCircle, XCircle, Hash, Activity, Timer, BarChart3, Cpu } from 'lucide-react';
-import { format } from 'date-fns';
+import { Link, useSearchParams } from 'react-router-dom';
+import { Search, CheckCircle, XCircle, Hash, Activity, RotateCw, Cpu, Image as ImageIcon, FileDown } from 'lucide-react';
 import clsx from 'clsx';
 import ResultBadge from '../components/ResultBadge';
-import { fetchPart, SamLogRecord } from '../lib/api';
+import StateBadge from '../components/StateBadge';
+import EventTimeline from '../components/EventTimeline';
+import {
+  fetchPart,
+  formatDateTime,
+  formatPlantName,
+  partTracePdfUrl,
+  PART_STATE_LABEL,
+  PartResponse,
+  SamLogRecord,
+} from '../lib/api';
 
-function StatCard({ label, value, icon: Icon, color }: { label: string; value: string | number; icon: typeof Activity; color: string }) {
+function StatCard({
+  label,
+  value,
+  icon: Icon,
+  color,
+}: {
+  label: string;
+  value: string | number;
+  icon: typeof Activity;
+  color: string;
+}) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-4">
       <div className="flex items-center gap-3">
@@ -26,7 +45,7 @@ export default function PartTrace() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [dmc, setDmc] = useState(searchParams.get('dmc') || '');
   const [searchedDmc, setSearchedDmc] = useState(searchParams.get('dmc') || '');
-  const [records, setRecords] = useState<SamLogRecord[]>([]);
+  const [response, setResponse] = useState<PartResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [searched, setSearched] = useState(false);
@@ -40,10 +59,10 @@ export default function PartTrace() {
     setSearched(true);
     try {
       const result = await fetchPart(value.trim());
-      setRecords(result.records);
+      setResponse(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load part data');
-      setRecords([]);
+      setResponse(null);
     } finally {
       setLoading(false);
     }
@@ -62,42 +81,18 @@ export default function PartTrace() {
     doSearch(dmc);
   };
 
-  const formatDate = (v: string | null) => {
-    if (!v) return '-';
-    try { return format(new Date(v), 'dd/MM/yyyy, h:mm:ss a'); } catch { return v; }
-  };
-
-  // Compute stats from records
-  const stats = records.length > 0 ? {
-    totalRecords: records.length,
-    passCount: records.filter(r => r.Result === 'PASS').length,
-    failCount: records.filter(r => r.Result !== 'PASS').length,
-    circlipPass: records.filter(r => r.Circlip_Result === 'PASS').length,
-    circlipFail: records.filter(r => r.Circlip_Result === 'FAIL').length,
-    ringPass: records.filter(r => r.Ring_Result === 'PASS').length,
-    ringFail: records.filter(r => r.Ring_Result === 'FAIL').length,
-    avgCirclipTime: (() => {
-      const times = records.map(r => parseFloat(r.Circlip_Time || '')).filter(t => !isNaN(t));
-      return times.length > 0 ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : null;
-    })(),
-    avgRingTime: (() => {
-      const times = records.map(r => parseFloat(r.Ring_Time || '')).filter(t => !isNaN(t));
-      return times.length > 0 ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : null;
-    })(),
-    maxRingCount: Math.max(...records.map(r => r.Ring_Count || 0)),
-    latestResult: records[0],
-    plants: [...new Set(records.map(r => r.Plant_Id).filter(Boolean))],
-  } : null;
+  const records: SamLogRecord[] = response?.records ?? [];
+  const summary = response?.summary;
+  const alarms = response?.alarms ?? [];
+  const eventTimeline = response?.event_timeline ?? [];
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex items-center gap-3">
         <div className="w-1 h-8 bg-blue-600 rounded-full" />
         <h1 className="text-2xl font-bold text-gray-900">Part Traceability</h1>
       </div>
 
-      {/* Search */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
         <form onSubmit={handleSubmit} className="flex gap-3">
           <div className="relative flex-1">
@@ -130,14 +125,23 @@ export default function PartTrace() {
         <div className="bg-red-50 border border-red-200 text-red-700 px-5 py-4 rounded-xl text-sm">{error}</div>
       )}
 
-      {/* Results */}
-      {!loading && searched && records.length > 0 && stats && (
+      {!loading && searched && summary && records.length > 0 && (
         <>
-          {/* Current State card */}
+          {/* Current State */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
             <div className="flex items-center gap-3 mb-5">
               <div className="w-1 h-6 bg-blue-600 rounded-full" />
               <h2 className="text-lg font-semibold text-gray-800">Current State</h2>
+              <a
+                href={partTracePdfUrl(searchedDmc)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="ml-auto inline-flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors"
+                title="Download Part Trace report as PDF"
+              >
+                <FileDown size={14} />
+                Download PDF
+              </a>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-y-4 gap-x-8">
               <div className="flex items-center gap-3">
@@ -145,82 +149,140 @@ export default function PartTrace() {
                 <span className="text-sm font-mono font-semibold text-gray-900 break-all">{searchedDmc}</span>
               </div>
               <div className="flex items-center gap-3">
-                <span className="text-sm text-gray-500 w-28 shrink-0">Latest Result:</span>
-                <ResultBadge value={stats.latestResult.Result} />
+                <span className="text-sm text-gray-500 w-28 shrink-0">State:</span>
+                <StateBadge state={summary.state} />
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-sm text-gray-500 w-28 shrink-0">Plant:</span>
-                <span className="text-sm font-medium text-gray-800">{stats.plants.join(', ') || '-'}</span>
+                <span className="text-sm font-medium text-gray-800">{formatPlantName(summary.latest.Plant_Id)}</span>
               </div>
               <div className="flex items-center gap-3">
-                <span className="text-sm text-gray-500 w-28 shrink-0">Ring Count:</span>
-                <span className="text-sm font-medium text-gray-800">{stats.maxRingCount}</span>
+                <span className="text-sm text-gray-500 w-28 shrink-0">Ring Attempts:</span>
+                <span className="text-sm font-medium text-gray-800">{summary.total_attempts}</span>
+                {summary.reinspected && (
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                    <RotateCw size={10} />
+                    Reinspected
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-3">
-                <span className="text-sm text-gray-500 w-28 shrink-0">Circlip Status:</span>
-                <ResultBadge value={stats.latestResult.Circlip_Result} />
+                <span className="text-sm text-gray-500 w-28 shrink-0">Snap Ring Status:</span>
+                <ResultBadge value={summary.latest.Circlip_Result} />
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-sm text-gray-500 w-28 shrink-0">Ring Status:</span>
-                <ResultBadge value={stats.latestResult.Ring_Result} />
+                <ResultBadge value={summary.latest.Ring_Result} />
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-gray-500 w-28 shrink-0">First Seen:</span>
+                <span className="text-sm text-gray-800">{formatDateTime(summary.first_seen)}</span>
               </div>
               <div className="flex items-center gap-3">
                 <span className="text-sm text-gray-500 w-28 shrink-0">Last Seen:</span>
-                <span className="text-sm text-gray-800">{formatDate(stats.latestResult.Date_Time)}</span>
+                <span className="text-sm text-gray-800">{formatDateTime(summary.last_seen)}</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-gray-500 w-28 shrink-0">Unload Time:</span>
+                <span className="text-sm text-gray-800">{formatDateTime(summary.latest.Unloading_Time)}</span>
               </div>
             </div>
           </div>
 
-          {/* Stats cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-            <StatCard label="Total Records" value={stats.totalRecords} icon={Hash} color="bg-blue-500" />
-            <StatCard label="Passed" value={stats.passCount} icon={CheckCircle} color="bg-emerald-500" />
-            <StatCard label="Failed" value={stats.failCount} icon={XCircle} color="bg-red-500" />
-            <StatCard label="Ring Attempts" value={stats.maxRingCount} icon={Activity} color="bg-amber-500" />
-            <StatCard label="Avg Circlip Time" value={stats.avgCirclipTime ? `${stats.avgCirclipTime} ms` : '-'} icon={Timer} color="bg-purple-500" />
-            <StatCard label="Avg Ring Time" value={stats.avgRingTime ? `${stats.avgRingTime} ms` : '-'} icon={BarChart3} color="bg-indigo-500" />
+          {/* Stats */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <StatCard label="Total Records" value={response.total_records} icon={Hash} color="bg-blue-500" />
+            <StatCard label="Ring Attempts" value={summary.total_attempts} icon={Activity} color="bg-amber-500" />
+            <StatCard
+              label="Reinspected"
+              value={summary.reinspected ? 'Yes' : 'No'}
+              icon={RotateCw}
+              color={summary.reinspected ? 'bg-indigo-500' : 'bg-slate-400'}
+            />
+            <StatCard
+              label="Final State"
+              value={PART_STATE_LABEL[summary.state]}
+              icon={summary.state === 'PACKED' || summary.state === 'RING_OK' ? CheckCircle : XCircle}
+              color={summary.state === 'PACKED' || summary.state === 'RING_OK' ? 'bg-emerald-500' : 'bg-red-500'}
+            />
           </div>
 
-          {/* Inspection Attempts */}
+          {/* Inspection Attempts — one row per attempt, ordered by Ring_Count ASC. */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
             <div className="flex items-center gap-3 mb-5">
               <div className="w-1 h-6 bg-blue-600 rounded-full" />
               <h2 className="text-lg font-semibold text-gray-800">Inspection Attempts</h2>
             </div>
-            <div className="space-y-3">
+            <div className="space-y-2">
               {records.map((record, i) => {
                 const hasCirclip = record.Circlip_Result !== null;
                 const hasRing = record.Ring_Result !== null;
                 return (
                   <div key={i} className="space-y-2">
-                    {/* Circlip inspection */}
                     {hasCirclip && (
-                      <div className={clsx(
-                        'flex items-center gap-4 px-5 py-3 rounded-lg border-l-4',
-                        record.Circlip_Result === 'PASS' ? 'border-l-emerald-500 bg-emerald-50/50' : 'border-l-red-500 bg-red-50/50'
-                      )}>
-                        <span className="text-xs font-bold text-gray-700 bg-gray-200 px-2.5 py-1 rounded uppercase tracking-wide">Circlip</span>
-                        <span className="text-xs text-gray-500">Attempt {record.Ring_Count || 1}</span>
-                        <span className={clsx('text-sm font-bold', record.Circlip_Result === 'PASS' ? 'text-emerald-700' : 'text-red-700')}>
+                      <div
+                        className={clsx(
+                          'flex flex-wrap items-center gap-4 px-5 py-3 rounded-lg border-l-4',
+                          record.Circlip_Result === 'PASS'
+                            ? 'border-l-emerald-500 bg-emerald-50/50'
+                            : 'border-l-red-500 bg-red-50/50',
+                        )}
+                      >
+                        <span className="text-xs font-bold text-gray-700 bg-gray-200 px-2.5 py-1 rounded uppercase tracking-wide">
+                          Snap Ring
+                        </span>
+                        <span className="text-xs text-gray-500">Attempt 1</span>
+                        <span
+                          className={clsx(
+                            'text-sm font-bold',
+                            record.Circlip_Result === 'PASS' ? 'text-emerald-700' : 'text-red-700',
+                          )}
+                        >
                           {record.Circlip_Result}
                         </span>
-                        {record.Circlip_Time && <span className="text-xs text-gray-400 ml-auto">Time: {record.Circlip_Time} ms</span>}
-                        <span className="text-xs text-gray-400">{formatDate(record.Date_Time)}</span>
+                        <span className="text-xs text-gray-500">
+                          Time: {formatDateTime(record.Circlip_Time ?? record.Date_Time)}
+                        </span>
+                        <Link
+                          to={`/images?dmc=${encodeURIComponent(searchedDmc)}&inspection_type=CIRCLIP`}
+                          className="ml-auto inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"
+                        >
+                          <ImageIcon size={12} />
+                          View Images
+                        </Link>
                       </div>
                     )}
-                    {/* Ring inspection */}
                     {hasRing && (
-                      <div className={clsx(
-                        'flex items-center gap-4 px-5 py-3 rounded-lg border-l-4',
-                        record.Ring_Result === 'PASS' ? 'border-l-emerald-500 bg-emerald-50/50' : 'border-l-red-500 bg-red-50/50'
-                      )}>
-                        <span className="text-xs font-bold text-gray-700 bg-gray-200 px-2.5 py-1 rounded uppercase tracking-wide">Ring</span>
-                        <span className="text-xs text-gray-500">Attempt {record.Ring_Count || 1}</span>
-                        <span className={clsx('text-sm font-bold', record.Ring_Result === 'PASS' ? 'text-emerald-700' : 'text-red-700')}>
+                      <div
+                        className={clsx(
+                          'flex flex-wrap items-center gap-4 px-5 py-3 rounded-lg border-l-4',
+                          record.Ring_Result === 'PASS'
+                            ? 'border-l-emerald-500 bg-emerald-50/50'
+                            : 'border-l-red-500 bg-red-50/50',
+                        )}
+                      >
+                        <span className="text-xs font-bold text-gray-700 bg-gray-200 px-2.5 py-1 rounded uppercase tracking-wide">
+                          Ring
+                        </span>
+                        <span className="text-xs text-gray-500">Attempt {record.Ring_Count ?? 1}</span>
+                        <span
+                          className={clsx(
+                            'text-sm font-bold',
+                            record.Ring_Result === 'PASS' ? 'text-emerald-700' : 'text-red-700',
+                          )}
+                        >
                           {record.Ring_Result}
                         </span>
-                        {record.Ring_Time && <span className="text-xs text-gray-400 ml-auto">Time: {record.Ring_Time} ms</span>}
-                        <span className="text-xs text-gray-400">{formatDate(record.Date_Time)}</span>
+                        <span className="text-xs text-gray-500">
+                          Time: {formatDateTime(record.Ring_Time ?? record.Date_Time)}
+                        </span>
+                        <Link
+                          to={`/images?dmc=${encodeURIComponent(searchedDmc)}&inspection_type=RING&attempt=${record.Ring_Count ?? 1}`}
+                          className="ml-auto inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium"
+                        >
+                          <ImageIcon size={12} />
+                          View Images
+                        </Link>
                       </div>
                     )}
                   </div>
@@ -229,69 +291,62 @@ export default function PartTrace() {
             </div>
           </div>
 
-          {/* Event Timeline */}
+          {/* Alarm History — PLC alarm edges (ON/OFF) recorded for this DMC
+              while it was the active part. Rendered between Inspection
+              Attempts and Event Timeline, styled to match the former. */}
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-1 h-6 bg-blue-600 rounded-full" />
+              <h2 className="text-lg font-semibold text-gray-800">Alarm History</h2>
+            </div>
+            {alarms.length === 0 ? (
+              <p className="text-sm text-gray-400 py-2">
+                No alarms recorded during this part's processing.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {alarms.map((a) => (
+                  <div
+                    key={a.id}
+                    className={clsx(
+                      'flex flex-wrap items-center gap-4 px-5 py-3 rounded-lg border-l-4',
+                      a.status === 'ON'
+                        ? 'border-l-red-500 bg-red-50/50'
+                        : 'border-l-gray-400 bg-gray-50/50',
+                    )}
+                  >
+                    <span
+                      className={clsx(
+                        'text-xs font-bold px-2.5 py-1 rounded uppercase tracking-wide',
+                        a.status === 'ON'
+                          ? 'bg-red-500 text-white'
+                          : 'bg-gray-400 text-white',
+                      )}
+                    >
+                      {a.status}
+                    </span>
+                    <span className="text-sm font-bold text-gray-800">{a.alarm}</span>
+                    <span className="text-xs text-gray-500 ml-auto">
+                      Time: {formatDateTime(a.logTime)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Event Timeline — 13-station journey of the part through the
+              line. 4 of the events are real PLC checkpoints (3, 7, 13,
+              15); the rest are deterministic intermediate stations
+              rendered by name when the part progressed past them.
+              Re-inspection history lives in Inspection Attempts above —
+              this timeline shows only the final state at event 13. */}
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
             <div className="flex items-center gap-3 mb-5">
               <div className="w-1 h-6 bg-blue-600 rounded-full" />
               <h2 className="text-lg font-semibold text-gray-800">Event Timeline</h2>
             </div>
-            <div className="relative">
-              {/* Timeline line */}
-              <div className="absolute left-6 top-0 bottom-0 w-0.5 bg-blue-200" />
-
-              <div className="space-y-4">
-                {records.map((record, i) => {
-                  const isPass = record.Result === 'PASS';
-                  return (
-                    <div key={i} className="relative flex gap-4 pl-3">
-                      {/* Timeline dot */}
-                      <div className={clsx(
-                        'relative z-10 w-7 h-7 rounded-full flex items-center justify-center shrink-0',
-                        isPass ? 'bg-emerald-500' : 'bg-red-500'
-                      )}>
-                        {isPass ? <CheckCircle size={14} className="text-white" /> : <XCircle size={14} className="text-white" />}
-                      </div>
-
-                      {/* Event card */}
-                      <div className="flex-1 bg-gray-50 rounded-lg border border-gray-200 p-4 -mt-1">
-                        <div className="flex flex-wrap items-center gap-3 mb-2">
-                          <span className="text-xs text-gray-400">{formatDate(record.Date_Time)}</span>
-                          <span className="text-xs font-bold text-gray-600 bg-gray-200 px-2 py-0.5 rounded">
-                            {record.Plant_Id}
-                          </span>
-                          <ResultBadge value={record.Result} />
-                        </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                          <div>
-                            <span className="text-gray-400">Circlip:</span>{' '}
-                            <span className={clsx('font-semibold', record.Circlip_Result === 'PASS' ? 'text-emerald-600' : record.Circlip_Result === 'FAIL' ? 'text-red-600' : 'text-gray-400')}>
-                              {record.Circlip_Result || '-'}
-                            </span>
-                            {record.Circlip_Time && <span className="text-gray-400"> ({record.Circlip_Time}ms)</span>}
-                          </div>
-                          <div>
-                            <span className="text-gray-400">Ring:</span>{' '}
-                            <span className={clsx('font-semibold', record.Ring_Result === 'PASS' ? 'text-emerald-600' : record.Ring_Result === 'FAIL' ? 'text-red-600' : 'text-gray-400')}>
-                              {record.Ring_Result || '-'}
-                            </span>
-                            {record.Ring_Time && <span className="text-gray-400"> ({record.Ring_Time}ms)</span>}
-                          </div>
-                          <div>
-                            <span className="text-gray-400">Ring Count:</span>{' '}
-                            <span className="font-semibold text-gray-700">{record.Ring_Count ?? '-'}</span>
-                          </div>
-                          <div>
-                            <span className="text-gray-400">Unload:</span>{' '}
-                            <span className="font-semibold text-gray-700">{record.Unloading_Time || '-'}</span>
-                            {record.Unloading_Time && <span className="text-gray-400">ms</span>}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+            <EventTimeline steps={eventTimeline} />
           </div>
         </>
       )}

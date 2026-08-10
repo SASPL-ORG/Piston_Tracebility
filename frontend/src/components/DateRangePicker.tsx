@@ -1,4 +1,5 @@
-import { format, subDays, startOfMonth } from 'date-fns';
+import { format, subDays, startOfMonth, parseISO } from 'date-fns';
+import { formatPlantName } from '../lib/api';
 
 interface DateRangePickerProps {
   from: string;
@@ -6,32 +7,62 @@ interface DateRangePickerProps {
   plant: string;
   plants: string[];
   onChange: (from: string, to: string, plant: string) => void;
+  // Optional override for what "today" means. Dashboard passes
+  // getProductionDate() so "Today" / "7 Days" / "This Month" all anchor on
+  // the production-date rollover (07:30 boundary). Default = calendar today.
+  todayOverride?: string;
 }
 
-const presets = [
-  { label: 'Today', getRange: () => ({ from: format(new Date(), 'yyyy-MM-dd'), to: format(new Date(), 'yyyy-MM-dd') }) },
-  { label: '7 Days', getRange: () => ({ from: format(subDays(new Date(), 7), 'yyyy-MM-dd'), to: format(new Date(), 'yyyy-MM-dd') }) },
-  { label: '30 Days', getRange: () => ({ from: format(subDays(new Date(), 30), 'yyyy-MM-dd'), to: format(new Date(), 'yyyy-MM-dd') }) },
-  { label: 'This Month', getRange: () => ({ from: format(startOfMonth(new Date()), 'yyyy-MM-dd'), to: format(new Date(), 'yyyy-MM-dd') }) },
+interface Preset {
+  label: string;
+  getRange: (todayIso: string) => { from: string; to: string };
+}
+
+const presets: Preset[] = [
+  {
+    label: 'Today',
+    getRange: (t) => ({ from: t, to: t }),
+  },
+  {
+    label: '7 Days',
+    getRange: (t) => ({ from: format(subDays(parseISO(t), 7), 'yyyy-MM-dd'), to: t }),
+  },
+  {
+    label: '30 Days',
+    getRange: (t) => ({ from: format(subDays(parseISO(t), 30), 'yyyy-MM-dd'), to: t }),
+  },
+  {
+    label: 'This Month',
+    getRange: (t) => ({ from: format(startOfMonth(parseISO(t)), 'yyyy-MM-dd'), to: t }),
+  },
 ];
 
-export default function DateRangePicker({ from, to, plant, plants, onChange }: DateRangePickerProps) {
+export default function DateRangePicker({ from, to, plant, plants, onChange, todayOverride }: DateRangePickerProps) {
+  const today = todayOverride ?? format(new Date(), 'yyyy-MM-dd');
   return (
     <div className="flex flex-wrap items-center gap-3">
       {/* Presets */}
       <div className="flex gap-1">
-        {presets.map((p) => (
-          <button
-            key={p.label}
-            onClick={() => {
-              const r = p.getRange();
-              onChange(r.from, r.to, plant);
-            }}
-            className="px-3 py-1.5 text-xs font-medium rounded-md bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 hover:border-gray-300 transition-colors"
-          >
-            {p.label}
-          </button>
-        ))}
+        {presets.map((p) => {
+          const r = p.getRange(today);
+          // Active if the current From/To matches this preset's range
+          // exactly. Manually editing either picker breaks the match and
+          // all chips fall back to the unselected state.
+          const active = r.from === from && r.to === to;
+          return (
+            <button
+              key={p.label}
+              onClick={() => onChange(r.from, r.to, plant)}
+              className={
+                active
+                  ? 'px-3 py-1.5 text-xs font-medium rounded-md border border-blue-600 bg-blue-600 text-white transition-colors'
+                  : 'px-3 py-1.5 text-xs font-medium rounded-md bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 hover:border-gray-300 transition-colors'
+              }
+            >
+              {p.label}
+            </button>
+          );
+        })}
       </div>
 
       <div className="h-6 w-px bg-gray-200 hidden sm:block" />
@@ -67,7 +98,7 @@ export default function DateRangePicker({ from, to, plant, plants, onChange }: D
           >
             <option value="">All Plants</option>
             {plants.map((p) => (
-              <option key={p} value={p}>{p}</option>
+              <option key={p} value={p}>{formatPlantName(p)}</option>
             ))}
           </select>
         </div>
