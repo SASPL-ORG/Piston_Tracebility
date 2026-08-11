@@ -128,10 +128,10 @@ const SUMMARY_COLUMNS: SummaryCategory[] = [
   {
     label: 'EGR',
     subs: [
-      { label: 'ISG', cells: [
+      { label: 'N ISG', cells: [
         { code: 'M100', grade: 'A' }, { code: 'M110', grade: 'B' }, { code: 'M120', grade: 'C' },
       ] },
-      { label: 'N ISG', cells: [
+      { label: 'ISG', cells: [
         { code: 'M150', grade: 'AS' }, { code: 'M160', grade: 'BS' }, { code: 'M170', grade: 'CS' },
       ] },
     ],
@@ -139,10 +139,10 @@ const SUMMARY_COLUMNS: SummaryCategory[] = [
   {
     label: 'N EGR',
     subs: [
-      { label: 'ISG', cells: [
+      { label: 'N ISG', cells: [
         { code: 'M400', grade: 'AG' }, { code: 'M410', grade: 'BG' }, { code: 'M420', grade: 'CG' },
       ] },
-      { label: 'N ISG', cells: [
+      { label: 'ISG', cells: [
         { code: 'M450', grade: 'AL' }, { code: 'M460', grade: 'BL' }, { code: 'M470', grade: 'CL' },
       ] },
     ],
