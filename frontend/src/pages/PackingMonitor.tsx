@@ -19,6 +19,7 @@ import {
 } from '../lib/api';
 import PackingSummaryMatrix from '../components/PackingSummaryMatrix';
 import PackingHistoryModal from '../components/PackingHistoryModal';
+import LiveScannerStatus from '../components/LiveScannerStatus';
 
 // ---------------------------------------------------------------------------
 // PACKING — LIVE MIRROR (README_DESKTOP_PACKING_PAGE.md)
@@ -298,6 +299,11 @@ export default function PackingMonitor() {
           </div>
         )}
       </div>
+
+      {/* Live Scanner Status — mirrors each Zebra gun's Bin / Pallet counter
+          (pallet-to-date), the exact number the operator reads on the handheld.
+          Distinct from the "Packed today" KPI below, which is a daily count. */}
+      <LiveScannerStatus />
 
       {/* KPI strip — today */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
