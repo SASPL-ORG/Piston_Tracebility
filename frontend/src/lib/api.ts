@@ -285,6 +285,8 @@ export interface ListParams {
   sort?: string;
   order?: string;
   search?: string;
+  // Part-number filter — a P-code (e.g. 'P234102M100'); narrows to that variant.
+  pcode?: string;
   // Column-level filters (comma-separated lists of values, validated server-side).
   state?: string;
   circlip?: string;

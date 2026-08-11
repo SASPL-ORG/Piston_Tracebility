@@ -5,6 +5,7 @@ import { Download, ExternalLink, RotateCw, RotateCcw } from 'lucide-react';
 import clsx from 'clsx';
 import DateRangePicker from '../components/DateRangePicker';
 import { getProductionDate } from '../lib/shifts';
+import { GRADE_GROUPS } from '../lib/grades';
 import Pagination from '../components/Pagination';
 import ResultBadge from '../components/ResultBadge';
 import StateBadge from '../components/StateBadge';
@@ -240,6 +241,7 @@ export default function Lists() {
   const [data, setData] = useState<PaginatedResponse<PartListItem> | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useSessionState('lists/search', '');
+  const [pcode, setPcode] = useSessionState('lists/pcode', ''); // part-number filter (P-code)
   // Column-level filters; empty = no constraint.
   const [stateFilter, setStateFilter] = useSessionState<string[]>('lists/stateFilter', []);
   const [circlipFilter, setCirclipFilter] = useSessionState<string[]>('lists/circlipFilter', []);
@@ -280,6 +282,7 @@ export default function Lists() {
         sort: 'Date_Time',
         order: 'desc',
         search: search || undefined,
+        pcode: pcode || undefined,
         state: stateFilter.length ? stateFilter.join(',') : undefined,
         circlip: circlipFilter.length ? circlipFilter.join(',') : undefined,
         ring: ringFilter.length ? ringFilter.join(',') : undefined,
@@ -292,7 +295,7 @@ export default function Lists() {
     } finally {
       setLoading(false);
     }
-  }, [type, from, to, plant, page, search, stateFilter, circlipFilter, ringFilter, timeFrom, timeTo]);
+  }, [type, from, to, plant, page, search, pcode, stateFilter, circlipFilter, ringFilter, timeFrom, timeTo]);
 
   useEffect(() => {
     fetchPlants().then(setPlants).catch(() => {});
@@ -357,6 +360,7 @@ export default function Lists() {
     type !== 'all' ||
     !!plant ||
     !!search ||
+    !!pcode ||
     stateFilter.length > 0 ||
     circlipFilter.length > 0 ||
     ringFilter.length > 0 ||
@@ -367,6 +371,7 @@ export default function Lists() {
     setType('all');
     setPlant('');
     setSearch('');
+    setPcode('');
     setStateFilter([]);
     setCirclipFilter([]);
     setRingFilter([]);
@@ -414,6 +419,7 @@ export default function Lists() {
     plant: plant || undefined,
     sort: 'Date_Time',
     order: 'desc',
+    pcode: pcode || undefined,
     state: stateFilter.length ? stateFilter.join(',') : undefined,
     circlip: circlipFilter.length ? circlipFilter.join(',') : undefined,
     ring: ringFilter.length ? ringFilter.join(',') : undefined,
@@ -501,6 +507,21 @@ export default function Lists() {
           )}
         </div>
         <div className="flex items-center gap-3">
+          <select
+            value={pcode}
+            onChange={(e) => { setPcode(e.target.value); setPage(1); }}
+            title="Filter by part number (model)"
+            className="px-3 py-1.5 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+          >
+            <option value="">All part numbers</option>
+            {GRADE_GROUPS.map((g) => (
+              <optgroup key={g.category} label={g.category}>
+                {g.grades.map((gr) => (
+                  <option key={gr.pCode} value={gr.pCode}>{gr.pCode} ({gr.code})</option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
           <input
             type="text"
             placeholder="Search DMC..."
