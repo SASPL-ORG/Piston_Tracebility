@@ -19,6 +19,12 @@ import { GRADE_BY_PCODE, modelOfPCode } from '../lib/grades';
 // reader (the Zebra or a phone) and you get the packing number back.
 // No external API: qrcode.react renders an SVG client-side, so this
 // works on an air-gapped SCADA box.
+//
+// The pallet number IS the lot number (it encodes the packing date +
+// a per-day sequence). We surface it as the Lot / Pallet Number and
+// also render a human-readable DD-MM-YY / NN breakdown, plus a combined
+// Part No / Grade / Model line, the supplier/model code carried in every
+// part's DMC (constant across a pallet), and a dashed numeric pack date.
 
 export default function PackingPrintLabel() {
   const { packingNumber = '' } = useParams<{ packingNumber: string }>();
@@ -49,7 +55,10 @@ export default function PackingPrintLabel() {
   const modelNumber = grade ? (modelOfPCode(grade) ?? '—') : '—';
   const qty = rows.length;
   const firstPackedAt = rows[0]?.packedAt ?? null;
-  const packingDate = formatDate(firstPackedAt);
+  const packingDate = formatDateNumeric(firstPackedAt);          // 05-08-2026
+  const lotReadable = readablePackingNumber(packingNumber);      // 05-08-26 / 02
+  const supplierCode = supplierCodeFromDmc(rows[0]?.dmc ?? '', grade); // VTH16
+  const partLine = grade ? `${grade} / ${gradeCode} / ${modelNumber}` : '—'; // P234102M160 / BS / EGR
 
   return (
     <div className="min-h-screen bg-gray-100 print:bg-white p-6 print:p-0">
@@ -97,10 +106,9 @@ export default function PackingPrintLabel() {
         <div className="grid grid-cols-3 gap-6">
           {/* Left — fields */}
           <div className="col-span-2 space-y-5">
-            <LabelField label="Pallet Number" value={packingNumber} mono large />
-            <LabelField label="Model Number" value={modelNumber} />
-            <LabelField label="Part Number" value={grade || '—'} mono />
-            <LabelField label="Grade" value={gradeCode} />
+            <LabelField label="Lot / Pallet Number" value={packingNumber} sub={lotReadable} mono large />
+            <LabelField label="Part No / Grade / Model" value={loading ? '…' : partLine} mono />
+            <LabelField label="Supplier / Model Code" value={supplierCode} mono />
             <LabelField label="Date of Packing" value={packingDate} />
             <LabelField
               label="Quantity"
@@ -120,7 +128,7 @@ export default function PackingPrintLabel() {
               />
             </div>
             <div className="text-[10px] text-gray-500 mt-2 text-center">
-              Scan to read pallet number
+              Scan to read lot / pallet number
             </div>
             <div className="text-xs font-mono mt-1">{packingNumber}</div>
           </div>
@@ -134,11 +142,13 @@ export default function PackingPrintLabel() {
 function LabelField({
   label,
   value,
+  sub,
   mono,
   large,
 }: {
   label: string;
   value: string;
+  sub?: string;
   mono?: boolean;
   large?: boolean;
 }) {
@@ -147,32 +157,61 @@ function LabelField({
       <span className="text-xs font-semibold uppercase tracking-wider text-gray-500 w-40 shrink-0">
         {label}
       </span>
-      <span
-        className={[
-          'font-bold text-gray-900',
-          mono ? 'font-mono' : '',
-          large ? 'text-3xl tracking-wider' : 'text-xl',
-        ].join(' ')}
-      >
-        {value}
+      <span className="inline-flex flex-col">
+        <span
+          className={[
+            'font-bold text-gray-900',
+            mono ? 'font-mono' : '',
+            large ? 'text-3xl tracking-wider' : 'text-xl',
+          ].join(' ')}
+        >
+          {value}
+        </span>
+        {sub && (
+          <span className="text-sm font-mono text-gray-500 mt-0.5">{sub}</span>
+        )}
       </span>
     </div>
   );
 }
 
-function formatDate(iso: string | null): string {
+// Packing number is DDMMYYNN (e.g. 05082602 = 05 Aug 2026, pallet 02).
+// Render it human-readable as DD-MM-YY / NN. Falls back to the raw string
+// if it doesn't match the expected shape.
+function readablePackingNumber(s: string): string {
+  const m = /^(\d{2})(\d{2})(\d{2})(\d+)$/.exec(s.trim());
+  if (!m) return s;
+  const [, dd, mm, yy, nn] = m;
+  return `${dd}-${mm}-${yy} / ${nn}`;
+}
+
+// The supplier/model code is the DMC segment immediately before the part
+// number. DMC is dash-delimited: [)>.06 - VTH16 - <partNumber> - T… - DB…
+// It's constant across a pallet, so the first row is representative.
+function supplierCodeFromDmc(dmc: string, partNumber: string): string {
+  if (!dmc) return '—';
+  const segs = dmc.split('-');
+  const idx = partNumber ? segs.indexOf(partNumber) : -1;
+  if (idx > 0) return segs[idx - 1];
+  return segs[1] ?? '—';
+}
+
+// Dashed numeric date in IST: DD-MM-YYYY (e.g. 05-08-2026).
+function formatDateNumeric(iso: string | null): string {
   if (!iso) return '—';
   try {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return iso;
-    return d.toLocaleDateString('en-IN', {
+    // en-GB gives DD/MM/YYYY; swap slashes for dashes.
+    return new Intl.DateTimeFormat('en-GB', {
       day: '2-digit',
-      month: 'short',
+      month: '2-digit',
       year: 'numeric',
       timeZone: 'Asia/Kolkata',
-    });
+    })
+      .format(d)
+      .replace(/\//g, '-');
   } catch {
     return iso;
   }
 }
-

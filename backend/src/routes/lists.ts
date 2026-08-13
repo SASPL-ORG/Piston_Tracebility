@@ -60,6 +60,9 @@ interface ListQuery {
   sort?: string;
   order?: string;
   search?: string;
+  // Part-number filter — a P-code (e.g. 'P234102M100'). Narrows to DMCs whose
+  // part number matches, so the operator can view a single model/variant.
+  pcode?: string;
   // Column-level filters (comma-separated). Empty / omitted = no filter.
   // state — one or more of the PartState enum values.
   state?: string;
@@ -174,6 +177,12 @@ function buildBaseCte(query: ListQuery, request: import('mssql').Request): strin
   if (query.search) {
     conds.push('DMC LIKE @search');
     request.input('search', `%${query.search}%`);
+  }
+  // Part-number filter: match the P-code inside the DMC. Parameterized, so the
+  // value is safe; only a sane P-code shape is accepted to avoid stray '%'.
+  if (query.pcode && /^[A-Za-z0-9]{1,20}$/.test(query.pcode)) {
+    conds.push('DMC LIKE @pcode');
+    request.input('pcode', `%${query.pcode}%`);
   }
   return buildLatestPerDmcCte(conds);
 }

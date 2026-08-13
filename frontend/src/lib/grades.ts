@@ -15,7 +15,7 @@ export interface GradeGroup {
 
 export const GRADE_GROUPS: GradeGroup[] = [
   {
-    category: 'EGR · ISG',
+    category: 'EGR · N ISG',
     grades: [
       { code: 'A', pCode: 'P234102M100' },
       { code: 'B', pCode: 'P234102M110' },
@@ -23,7 +23,7 @@ export const GRADE_GROUPS: GradeGroup[] = [
     ],
   },
   {
-    category: 'EGR · N ISG',
+    category: 'EGR · ISG',
     grades: [
       { code: 'AS', pCode: 'P234102M150' },
       { code: 'BS', pCode: 'P234102M160' },
@@ -31,7 +31,7 @@ export const GRADE_GROUPS: GradeGroup[] = [
     ],
   },
   {
-    category: 'N EGR · ISG',
+    category: 'N EGR · N ISG',
     grades: [
       { code: 'AG', pCode: 'P234102M400' },
       { code: 'BG', pCode: 'P234102M410' },
@@ -39,7 +39,7 @@ export const GRADE_GROUPS: GradeGroup[] = [
     ],
   },
   {
-    category: 'N EGR · N ISG',
+    category: 'N EGR · ISG',
     grades: [
       { code: 'AL', pCode: 'P234102M450' },
       { code: 'BL', pCode: 'P234102M460' },
@@ -92,15 +92,15 @@ export const GRADE_MATRIX: MatrixCategory[] = [
   {
     label: 'EGR',
     subs: [
-      { label: 'ISG',    grades: [GRADE_GROUPS[0].grades[0], GRADE_GROUPS[0].grades[1], GRADE_GROUPS[0].grades[2]] },
-      { label: 'N ISG',  grades: [GRADE_GROUPS[1].grades[0], GRADE_GROUPS[1].grades[1], GRADE_GROUPS[1].grades[2]] },
+      { label: 'N ISG',  grades: [GRADE_GROUPS[0].grades[0], GRADE_GROUPS[0].grades[1], GRADE_GROUPS[0].grades[2]] },
+      { label: 'ISG',    grades: [GRADE_GROUPS[1].grades[0], GRADE_GROUPS[1].grades[1], GRADE_GROUPS[1].grades[2]] },
     ],
   },
   {
     label: 'N EGR',
     subs: [
-      { label: 'ISG',    grades: [GRADE_GROUPS[2].grades[0], GRADE_GROUPS[2].grades[1], GRADE_GROUPS[2].grades[2]] },
-      { label: 'N ISG',  grades: [GRADE_GROUPS[3].grades[0], GRADE_GROUPS[3].grades[1], GRADE_GROUPS[3].grades[2]] },
+      { label: 'N ISG',  grades: [GRADE_GROUPS[2].grades[0], GRADE_GROUPS[2].grades[1], GRADE_GROUPS[2].grades[2]] },
+      { label: 'ISG',    grades: [GRADE_GROUPS[3].grades[0], GRADE_GROUPS[3].grades[1], GRADE_GROUPS[3].grades[2]] },
     ],
   },
   {
