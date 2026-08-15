@@ -60,6 +60,13 @@ export default function PackingPrintLabel() {
   const supplierCode = supplierCodeFromDmc(rows[0]?.dmc ?? '', grade); // VTH16
   const partLine = grade ? `${grade} / ${gradeCode} / ${modelNumber}` : '—'; // P234102M160 / BS / EGR
 
+  // QR payload — one slash-delimited string carrying the pallet's key fields
+  // so a single scan yields everything: Lot/Pallet, Part, Grade, Packed date,
+  // Quantity (was: the pallet number alone). e.g. 05082602/P234102M160/BS/05-08-2026/82
+  const qrValue = loading
+    ? packingNumber
+    : `${packingNumber}/${grade}/${gradeCode}/${packingDate}/${qty}`;
+
   return (
     <div className="min-h-screen bg-gray-100 print:bg-white p-6 print:p-0">
       <style>{`
@@ -121,14 +128,14 @@ export default function PackingPrintLabel() {
           <div className="flex flex-col items-center justify-start">
             <div className="bg-white p-3 border-2 border-gray-800 print:border-black rounded">
               <QRCodeSVG
-                value={packingNumber}
+                value={qrValue}
                 size={180}
                 level="H"
                 includeMargin={false}
               />
             </div>
             <div className="text-[10px] text-gray-500 mt-2 text-center">
-              Scan to read lot / pallet number
+              Scan for: Lot / Part / Grade / Date / Qty
             </div>
             <div className="text-xs font-mono mt-1">{packingNumber}</div>
           </div>
