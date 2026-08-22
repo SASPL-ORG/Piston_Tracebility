@@ -276,6 +276,20 @@ function recordServerPack(pCode: string | null | undefined): void {
   };
 }
 
+// Per-grade serialization for the pack critical section. The pallet-full check
+// reads the in-memory count, but recordServerPack only updates it AFTER the
+// awaited DB insert — so two near-simultaneous packs of the same grade could
+// both pass the check and push a pallet past PALLET_CAPACITY (a pallet was seen
+// at 1081/1080). Chaining each grade's packs one-after-another closes that
+// window. Different grades still run concurrently; the map holds <=15 entries.
+const gradePackTail = new Map<string, Promise<unknown>>();
+function withGradeLock<T>(pCode: string, fn: () => Promise<T>): Promise<T> {
+  const prev = gradePackTail.get(pCode) ?? Promise.resolve();
+  const result = prev.catch(() => undefined).then(() => fn());
+  gradePackTail.set(pCode, result.catch(() => undefined));
+  return result;
+}
+
 // ---------------------------------------------------------------------------
 // Pack history — one record per successful PACKED_OK, with the packing
 // number that was active for the grade at the time of the pack. Backs
@@ -660,6 +674,10 @@ export default async function packingRoutes(app: FastifyInstance) {
         return { result: 'ALREADY_PACKED', ok: false, dmc, packedAt: prior, message: msg };
       }
 
+      // Serialize this grade's critical section (full-check -> insert -> count
+      // update) so two concurrent same-grade packs can't both pass the
+      // full-check and overshoot PALLET_CAPACITY. Different grades run free.
+      return await withGradeLock(pCode ?? '', async () => {
       // Pallet-full guard — refuse to add another part to a pallet that
       // already has PALLET_CAPACITY parts. Operator must press
       // "Print & Complete" to close the current pallet first; the next
@@ -764,6 +782,7 @@ export default async function packingRoutes(app: FastifyInstance) {
         }
         throw e;
       }
+      });
     } catch (err) {
       req.log.error('[packing] pack failed: ' + (err as Error).message);
       const msg = "Couldn't record the pack — retry.";
