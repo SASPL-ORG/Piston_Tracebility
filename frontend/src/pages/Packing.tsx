@@ -49,7 +49,7 @@ type Outcome =
   | { kind: 'checking' }
   | { kind: 'wrong_grade'; expected: string; scanned: string }
   | { kind: 'cant_read' }
-  | { kind: 'ok_packed'; grade: string; part?: PartInfo }
+  | { kind: 'ok_packed'; grade: string; part?: PartInfo; binComplete?: { bin: number } }
   | { kind: 'reject_logged' }
   | { kind: 'already_packed'; msg: string; part?: PartInfo }
   | { kind: 'do_not_pack'; msg: string; part?: PartInfo }
@@ -125,6 +125,16 @@ export default function Packing() {
     window.setTimeout(() => tone(196, 240, 'square', 0.28), 230);
   }, [tone]);
   const tickOk = useCallback(() => tone(1320, 70, 'sine', 0.14), [tone]);
+  // Bin-complete motif — two long beeps then three short ("Beeep, Beeep,
+  // Bep Bep Bep") so the operator hears, without looking, that 36 parts
+  // (one bin) just landed. Distinct from the single tickOk on every pack.
+  const binCompleteChime = useCallback(() => {
+    tone(880, 220, 'sine', 0.2);                                   // Beeep
+    window.setTimeout(() => tone(880, 220, 'sine', 0.2), 340);     // Beeep
+    window.setTimeout(() => tone(1320, 90, 'square', 0.18), 740);  // Bep
+    window.setTimeout(() => tone(1320, 90, 'square', 0.18), 920);  // Bep
+    window.setTimeout(() => tone(1320, 90, 'square', 0.18), 1100); // Bep
+  }, [tone]);
 
   useEffect(() => {
     focusInput();
@@ -246,8 +256,17 @@ export default function Packing() {
               packingNumber: p.pallet.packingNumber,
             });
           }
-          setOutcome({ kind: 'ok_packed', grade: scannedGrade?.code ?? pCode, part });
-          tickOk();
+          // Every 36th part closes a bin — fire the distinct chime + banner.
+          const packedNow = p.pallet?.packed ?? 0;
+          const binDone = packedNow > 0 && packedNow % BIN_CAPACITY === 0;
+          setOutcome({
+            kind: 'ok_packed',
+            grade: scannedGrade?.code ?? pCode,
+            part,
+            binComplete: binDone ? { bin: packedNow / BIN_CAPACITY } : undefined,
+          });
+          if (binDone) binCompleteChime();
+          else tickOk();
         } else if (p.result === 'PALLET_FULL') {
           // Backend refused — pallet has PALLET_CAPACITY parts already.
           // Sync our display (so the count shows the true 1080/1080)
@@ -412,6 +431,19 @@ export default function Packing() {
         <div className="text-6xl sm:text-7xl font-extrabold tracking-tight leading-none">{band.title}</div>
         <div className="mt-5 text-2xl sm:text-3xl font-semibold">{band.sub}</div>
         {band.hint && <div className="mt-3 text-lg sm:text-xl font-medium opacity-90">{band.hint}</div>}
+
+        {/* Bin-complete banner — shows when a 36-part bin just closed, paired
+            with the bin-complete chime. Stays until the next scan. */}
+        {outcome.kind === 'ok_packed' && outcome.binComplete && (
+          <div className="mt-7 px-8 py-4 rounded-2xl bg-white text-emerald-700 shadow-xl ring-2 ring-emerald-300 animate-pulse">
+            <div className="text-3xl sm:text-4xl font-extrabold tracking-tight">
+              ✓ BIN {outcome.binComplete.bin} COMPLETE
+            </div>
+            <div className="mt-1 text-lg sm:text-xl font-semibold text-emerald-600">
+              36 parts packed — start a new bin
+            </div>
+          </div>
+        )}
 
         {/* Part summary — only when verify returned a real part */}
         {part && (part.partNumber || part.dmc || part.snapRingStatus || part.ringInspectionStatus) && (
