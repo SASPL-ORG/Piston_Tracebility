@@ -8,6 +8,7 @@ import { serializeDateTime } from '../db/datetime.js';
 import { deleteImageRow } from '../images/db.js';
 import { stripDmcSeparators, DMC_SEPARATOR_CHARS } from '../db/state.js';
 import { getHideBeforeCached } from '../utils/hideState.js';
+import { hiddenDmcAndClause } from '../utils/hiddenParts.js';
 import type {
   PartImagesResponse,
   PartImagesSummaryResponse,
@@ -43,7 +44,7 @@ async function resolveCanonicalDmc(dmc: string): Promise<string | null> {
   // Trace / Lists (keeps demo mode consistent). Validated 'YYYY-MM-DD HH:mm:ss'
   // so the literal is safe.
   const hideBefore = getHideBeforeCached();
-  const hide = hideBefore ? ` AND Date_Time >= '${hideBefore}'` : '';
+  const hide = (hideBefore ? ` AND Date_Time >= '${hideBefore}'` : '') + hiddenDmcAndClause('DMC');
 
   // 1. Exact match first — the common case.
   const exact = await pool
@@ -231,7 +232,7 @@ export default async function imageRoutes(app: FastifyInstance) {
     // (calibration/reference) are always servable; part images additionally
     // respect the "demo hide" cutoff so hidden parts' bytes aren't served.
     const hideBefore = getHideBeforeCached();
-    const hide = hideBefore ? ` AND s.Date_Time >= '${hideBefore}'` : '';
+    const hide = (hideBefore ? ` AND s.Date_Time >= '${hideBefore}'` : '') + hiddenDmcAndClause('s.DMC');
     const result = await pool
       .request()
       .input('id', id)

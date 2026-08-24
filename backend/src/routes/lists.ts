@@ -10,8 +10,9 @@ import {
   rejectionReasonSql,
   isRejectionReason,
 } from '../db/state.js';
-import { cacheReads } from '../utils/responseCache.js';
+import { getOrComputeSWR } from '../utils/responseCache.js';
 import { hideCutoffCond } from '../utils/hideState.js';
+import { hiddenDmcInClause } from '../utils/hiddenParts.js';
 import { serializeDateTimeFields } from '../db/datetime.js';
 import type {
   ListFailureItem,
@@ -237,7 +238,11 @@ function classifiedSelect(): string {
 }
 
 export default async function listRoutes(app: FastifyInstance) {
-  app.get<{ Querystring: ListQuery }>('/list', { preHandler: cacheReads(30_000) }, async (req) => {
+  app.get<{ Querystring: ListQuery }>('/list', async (req) => {
+    // Single-flight + stale-while-revalidate: identical list views (same
+    // filters/page/sort) coalesce into ONE query and serve instantly from
+    // cache, so rapid paging + the 30s auto-refresh can't stampede the DB.
+    return getOrComputeSWR(req.url, 30_000, async () => {
     const page = Math.max(1, parseInt(req.query.page || '1', 10));
     const size = Math.min(200, Math.max(1, parseInt(req.query.size || '50', 10)));
     const sortKey = SORT_COLUMNS[req.query.sort || ''] || 'Date_Time';
@@ -354,6 +359,7 @@ export default async function listRoutes(app: FastifyInstance) {
       total_pages: Math.ceil(total / size),
     };
     return response;
+    });
   });
 
   // CSV export — same filter set + same dedupe + same classification.
@@ -449,7 +455,8 @@ export default async function listRoutes(app: FastifyInstance) {
   // narrowed the table below.
   app.get<{
     Querystring: Pick<ListQuery, 'from' | 'to' | 'plant' | 'time_from' | 'time_to'>;
-  }>('/summary', { preHandler: cacheReads(60_000) }, async (req) => {
+  }>('/summary', async (req) => {
+    return getOrComputeSWR(req.url, 60_000, async () => {
     const pool = await getPool();
     const request = pool.request();
     const conds = bindProductionDayFilterInputs(request, req.query);
@@ -528,6 +535,7 @@ export default async function listRoutes(app: FastifyInstance) {
 
     const response: ListSummaryResponse = { entries };
     return response;
+    });
   });
 
   // Failures list with rejection reasons — fuels the "Snap Ring
@@ -586,7 +594,7 @@ export default async function listRoutes(app: FastifyInstance) {
       const circlipReject = `(Circlip_Result = 'FAIL' OR ${rejectionReasonSql('Circlip_Rejection_Reason')})`;
       // Respect the "demo hide" cutoff — this is a direct SAM_Log query, so it
       // doesn't inherit the cutoff that buildLatestPerDmcCte injects elsewhere.
-      const where = [...conds, circlipReject, timeWhereRaw, hideCutoffCond()]
+      const where = [...conds, circlipReject, timeWhereRaw, hideCutoffCond(), hiddenDmcInClause('DMC')]
         .filter(Boolean)
         .join(' AND ');
       const r = await request.query(`

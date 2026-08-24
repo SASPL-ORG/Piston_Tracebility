@@ -6,7 +6,7 @@ import {
   MachineWindowInputs,
 } from '../utils/machineWindow.js';
 import { merge, clip, intersect, totalSeconds, Iv } from '../utils/intervals.js';
-import { cacheReads } from '../utils/responseCache.js';
+import { getOrComputeSWR } from '../utils/responseCache.js';
 
 // ---- Config -----------------------------------------------------------------
 // The PLC publishes three mutually-exclusive state bits, so the cards
@@ -181,7 +181,12 @@ interface MachineStatusResponse {
 export default async function machineStatusRoutes(app: FastifyInstance) {
   app.get<{
     Querystring: MachineWindowInputs & { plant?: string };
-  }>('/machine-status', { preHandler: cacheReads(30_000) }, async (req) => {
+  }>('/machine-status', async (req) => {
+    // Single-flight + stale-while-revalidate — same protection as the
+    // dashboard/list. The alarm/downtime aggregation is a few seconds cold;
+    // SWR serves it instantly once warm and keeps the 30s auto-refresh from
+    // stacking concurrent recomputes.
+    return getOrComputeSWR(req.url, 30_000, async () => {
     const win = resolveMachineWindow(req.query);
     const winMs: Iv = [win.start.getTime(), win.end.getTime()];
     const totalSec = totalSeconds([winMs]);
@@ -375,5 +380,6 @@ export default async function machineStatusRoutes(app: FastifyInstance) {
         (win.filtersIgnored ? ' (shift/hour ignored, multi-day)' : ''),
     );
     return response;
+    });
   });
 }

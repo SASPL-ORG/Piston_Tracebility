@@ -1,5 +1,6 @@
 import sql from 'mssql';
 import { getHideBeforeCached } from '../utils/hideState.js';
+import { hiddenDmcInClause } from '../utils/hiddenParts.js';
 
 // PartState has two stages along the "passed inspection" axis:
 //   COMPLETED — line says "all stations passed + part unloaded". This is
@@ -345,6 +346,12 @@ export function buildLatestPerDmcCte(extraConditions: string[]): string {
   // the cutoff (reveal) makes all history reappear — nothing is ever deleted.
   const hideBefore = getHideBeforeCached();
   if (hideBefore) conds.push(`Date_Time >= '${hideBefore}'`);
+  // "Hidden parts" — reversible, display-only removal of specific DMCs. Same
+  // safety model as the demo cutoff above: the list is strictly validated in
+  // hiddenParts, so the inlined `DMC NOT IN (...)` literal is injection-safe.
+  // Covers Dashboard + Lists (both flow through this CTE); nothing is deleted.
+  const hiddenDmcs = hiddenDmcInClause('DMC');
+  if (hiddenDmcs) conds.push(hiddenDmcs);
   const where = `WHERE ${conds.join(' AND ')}`;
   // per_dmc folds in the snap-ring recovery aggregates so the Lists page
   // can render Circlip_Result/Time for re-inspected parts without an
