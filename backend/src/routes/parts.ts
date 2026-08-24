@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { getPool } from '../db/connection.js';
 import { classifyState, hasCirclipRejection, isRejectionReason, stripDmcSeparators, canonicalizeDmcScan, DMC_SEPARATOR_CHARS } from '../db/state.js';
 import { getHideBeforeCached } from '../utils/hideState.js';
+import { hiddenDmcAndClause } from '../utils/hiddenParts.js';
 import { serializeDateTime, serializeDateTimeFields } from '../db/datetime.js';
 import { renderPartTracePdf, deriveSerializedRecords } from '../reports/partTracePdf.js';
 import type {
@@ -194,13 +195,17 @@ async function fetchPartRecords(dmc: string): Promise<SamLogRecord[]> {
   // Dashboard/Lists. Validated 'YYYY-MM-DD HH:mm:ss' so the literal is safe.
   const hideBefore = getHideBeforeCached();
   const hide = hideBefore ? ` AND Date_Time >= '${hideBefore}'` : '';
+  // "Hidden parts" — a listed DMC reads as not-found here (→ 404 "No records
+  // found"), matching how it's removed from Dashboard/Lists/Images. Applies to
+  // every lookup branch below (exact / canonical / separator-insensitive).
+  const hide2 = hide + hiddenDmcAndClause('DMC');
 
   // Fast path: exact match on the indexed DMC column. Part Trace passes the
   // stored key verbatim, so this is the common case and stays sargable.
   const exact = await pool
     .request()
     .input('dmc', dmc)
-    .query(`SELECT * FROM dbo.SAM_Log WHERE DMC = @dmc${hide} ${order}`);
+    .query(`SELECT * FROM dbo.SAM_Log WHERE DMC = @dmc${hide2} ${order}`);
   if (exact.recordset.length > 0) return exact.recordset as SamLogRecord[];
 
   // Fast path: rebuild the canonical stored key from a raw scan and exact-match
@@ -210,7 +215,7 @@ async function fetchPartRecords(dmc: string): Promise<SamLogRecord[]> {
     const canon = await pool
       .request()
       .input('dmc', canonical)
-      .query(`SELECT * FROM dbo.SAM_Log WHERE DMC = @dmc${hide} ${order}`);
+      .query(`SELECT * FROM dbo.SAM_Log WHERE DMC = @dmc${hide2} ${order}`);
     if (canon.recordset.length > 0) return canon.recordset as SamLogRecord[];
   }
 
@@ -230,7 +235,7 @@ async function fetchPartRecords(dmc: string): Promise<SamLogRecord[]> {
     .input('seps', DMC_SEPARATOR_CHARS)
     .query(
       `SELECT * FROM dbo.SAM_Log
-       WHERE REPLACE(TRANSLATE(DMC, @seps, REPLICATE(CHAR(1), LEN(@seps))), CHAR(1), '') = @norm${hide}
+       WHERE REPLACE(TRANSLATE(DMC, @seps, REPLICATE(CHAR(1), LEN(@seps))), CHAR(1), '') = @norm${hide2}
        ${order}`,
     );
   return reduced.recordset as SamLogRecord[];

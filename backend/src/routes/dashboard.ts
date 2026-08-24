@@ -9,7 +9,7 @@ import {
   CIRCLIP_REINSPECTED_SQL,
   shiftWhereSql,
 } from '../db/state.js';
-import { cacheReads } from '../utils/responseCache.js';
+import { getOrComputeSWR } from '../utils/responseCache.js';
 import type {
   DashboardResponse,
   ProductionGranularity,
@@ -66,7 +66,12 @@ function bucketSql(granularity: ProductionGranularity): { selectExpr: string; gr
 }
 
 export default async function dashboardRoutes(app: FastifyInstance) {
-  app.get<{ Querystring: DashboardQuery }>('/dashboard', { preHandler: cacheReads(30_000) }, async (req) => {
+  app.get<{ Querystring: DashboardQuery }>('/dashboard', async (req) => {
+    // Single-flight + stale-while-revalidate: at most one recompute per
+    // (range/shift) key runs at a time; everyone else gets the cached numbers
+    // instantly (briefly stale during a refresh). This is what stops the
+    // dashboard from 500-ing under the auto-refresh + retry thundering herd.
+    return getOrComputeSWR(req.url, 30_000, async () => {
     const filters = req.query;
     const shift = parseShift(filters.shift);
     const shiftWhere = shiftWhereSql(shift);
@@ -88,9 +93,6 @@ export default async function dashboardRoutes(app: FastifyInstance) {
     //   4. circlip_reinspected — had a circlip retry that saved it
     //   5. ring_reinspected    — had a ring retry that saved it
     //   6. passed              — clean first-time pass (no retries needed)
-    const dmcRequest = pool.request();
-    const dmcConds = bindProductionDayFilterInputs(dmcRequest, filters);
-    const dmcCte = buildLatestPerDmcCte(dmcConds);
     // Bucket priority is encoded once and reused so the totals stay
     // consistent across queries.
     const BUCKET_CASE = `CASE
@@ -101,14 +103,20 @@ export default async function dashboardRoutes(app: FastifyInstance) {
       WHEN p.max_ring_count > 1 AND l.Ring_Result = 'PASS' THEN 'ring_reinspected'
       ELSE 'passed'
     END`;
-    // 'passed' is INCLUSIVE — counts every DMC that ended in PACKED or
-    // RING_OK, regardless of whether it needed snap-ring or ring re-
-    // inspection along the way. Re-inspection counts (circlip_reinspected,
-    // ring_reinspected) are SUBSETS of passed: parts that ultimately
-    // passed but had a retry. Keeps the operator-facing identity
-    // intuitive: any part that came out good shows up in "Passed", and
-    // the re-inspection tiles tell you how many were saved by a retry.
-    const dmcResult = await dmcRequest.query(`
+
+    // Build all three panel queries up front, each on its own pooled request,
+    // then run them CONCURRENTLY. They're fully independent, so a dashboard
+    // load takes as long as the slowest single query instead of their sum —
+    // and each connection is held for less time, which is what keeps the
+    // endpoint from tipping over the 30s timeout when the DB is busy.
+
+    // KPI tiles. 'passed' is INCLUSIVE — counts every DMC that ended in PACKED
+    // or RING_OK, regardless of whether it needed snap-ring or ring
+    // re-inspection along the way. Re-inspection counts are SUBSETS of passed.
+    const dmcRequest = pool.request();
+    const dmcConds = bindProductionDayFilterInputs(dmcRequest, filters);
+    const dmcCte = buildLatestPerDmcCte(dmcConds);
+    const dmcQuery = dmcRequest.query(`
       ${dmcCte}
       SELECT
         COUNT(*) AS total,
@@ -122,23 +130,13 @@ export default async function dashboardRoutes(app: FastifyInstance) {
       INNER JOIN per_dmc p ON p.DMC = l.DMC
       WHERE ${shiftWhere}
     `);
-    const dmcRow = dmcResult.recordset[0] || {};
-    const total = dmcRow.total || 0;
-    const passed = dmcRow.passed || 0;
-    const kpiRow = {
-      circlip_fail: dmcRow.circlip_fail || 0,
-      ring_fail: dmcRow.ring_fail || 0,
-      in_progress: dmcRow.in_progress || 0,
-      circlip_reinspected: dmcRow.circlip_reinspected || 0,
-      ring_reinspected: dmcRow.ring_reinspected || 0,
-    };
 
     // Production breakdown — three buckets per time slice. In_Progress is
     // its own column so the chart doesn't paint pending parts as failures.
     const prodRequest = pool.request();
     const prodConds = bindProductionDayFilterInputs(prodRequest, filters);
     const prodCte = buildLatestPerDmcCte(prodConds);
-    const prodResult = await prodRequest.query(`
+    const prodQuery = prodRequest.query(`
       ${prodCte}
       SELECT
         ${selectExpr} AS bucket,
@@ -158,7 +156,7 @@ export default async function dashboardRoutes(app: FastifyInstance) {
     const stateRequest = pool.request();
     const stateConds = bindProductionDayFilterInputs(stateRequest, filters);
     const stateCte = buildLatestPerDmcCte(stateConds);
-    const stateResult = await stateRequest.query(`
+    const stateQuery = stateRequest.query(`
       ${stateCte}
       , classified AS (
         SELECT l.DMC, ${STATE_CASE_SQL_DISPLAY} AS state
@@ -171,6 +169,23 @@ export default async function dashboardRoutes(app: FastifyInstance) {
       FROM classified
       GROUP BY state
     `);
+
+    const [dmcResult, prodResult, stateResult] = await Promise.all([
+      dmcQuery,
+      prodQuery,
+      stateQuery,
+    ]);
+
+    const dmcRow = dmcResult.recordset[0] || {};
+    const total = dmcRow.total || 0;
+    const passed = dmcRow.passed || 0;
+    const kpiRow = {
+      circlip_fail: dmcRow.circlip_fail || 0,
+      ring_fail: dmcRow.ring_fail || 0,
+      in_progress: dmcRow.in_progress || 0,
+      circlip_reinspected: dmcRow.circlip_reinspected || 0,
+      ring_reinspected: dmcRow.ring_reinspected || 0,
+    };
 
     const STATE_ORDER: PartState[] = [
       'PACKED',
@@ -210,6 +225,7 @@ export default async function dashboardRoutes(app: FastifyInstance) {
       state_breakdown: stateBreakdown,
     };
     return response;
+    });
   });
 
   // Distinct plant IDs (still used by Lists; Dashboard no longer fetches it).
