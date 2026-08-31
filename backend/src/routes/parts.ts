@@ -63,6 +63,8 @@ const RING_ASSEMBLY_SUBSTATIONS = [
 function buildEventTimeline(
   records: SamLogRowWithReason[],
   stationEvents: Map<number, StationEvent>,
+  isPacked = false,
+  packedAt: string | null = null,
 ): EventTimelineStep[] {
   const timeline: EventTimelineStep[] = [];
   if (records.length === 0) return timeline;
@@ -167,16 +169,23 @@ function buildEventTimeline(
     });
   }
 
-  // Packed = Unloading_Time stamped on the latest row.
+  // Packing Station — the piston counts as PACKED only once it's SCANNED at the
+  // Zebra packing station (a non-reject row in Packed_Log_TEST). Until then it
+  // has merely left the cell onto the output conveyor ("Completed"), so show the
+  // packing step as a pending/grey marker rather than a done checkpoint.
   if (latest.Unloading_Time) {
-    timeline.push({
-      step: 16,
-      label: 'Packing Station',
-      type: 'checkpoint',
-      timestamp: latest.Unloading_Time,
-      status: 'COMPLETED',
-      reason: null,
-    });
+    if (isPacked) {
+      timeline.push({
+        step: 16,
+        label: 'Packing Station',
+        type: 'checkpoint',
+        timestamp: packedAt ?? latest.Unloading_Time,
+        status: 'COMPLETED',
+        reason: null,
+      });
+    } else {
+      timeline.push({ step: 16, label: 'Packing Station', type: 'intermediate' });
+    }
   }
 
   return timeline;
@@ -304,16 +313,22 @@ function sanitizeForFilename(s: string): string {
 // PACKED_LOG_JOIN_SQL that Lists/Dashboard use, so Part Trace agrees with them:
 //   COMPLETED = line-finished (sitting on the output conveyor), not yet scanned
 //   PACKED    = scanned at packing
-async function fetchIsPacked(dmc: string | null | undefined): Promise<boolean> {
-  if (!dmc) return false;
+async function fetchPackedInfo(
+  dmc: string | null | undefined,
+): Promise<{ packed: boolean; packedAt: string | null }> {
+  if (!dmc) return { packed: false, packedAt: null };
   const pool = await getPool();
   const r = await pool
     .request()
     .input('dmc', dmc)
     .query(
-      'SELECT TOP 1 1 AS packed FROM dbo.Packed_Log_TEST WITH (NOLOCK) WHERE DMC = @dmc AND Is_Reject = 0',
+      'SELECT TOP 1 Packed_At FROM dbo.Packed_Log_TEST WITH (NOLOCK) WHERE DMC = @dmc AND Is_Reject = 0 ORDER BY Packed_At DESC',
     );
-  return r.recordset.length > 0;
+  if (r.recordset.length === 0) return { packed: false, packedAt: null };
+  const raw = r.recordset[0].Packed_At as unknown;
+  const packedAt =
+    raw instanceof Date ? serializeDateTime(raw) : raw != null ? String(raw) : null;
+  return { packed: true, packedAt };
 }
 
 export default async function partRoutes(app: FastifyInstance) {
@@ -334,9 +349,9 @@ export default async function partRoutes(app: FastifyInstance) {
     // Per-station events are keyed by the STORED DMC (records[0].DMC), which
     // matches Station_Events exactly — the request param may be a raw scan that
     // only matched via the separator-insensitive fallback.
-    const [stationEvents, isPacked] = await Promise.all([
+    const [stationEvents, packedInfo] = await Promise.all([
       fetchStationEvents(records[0].DMC),
-      fetchIsPacked(records[0].DMC),
+      fetchPackedInfo(records[0].DMC),
     ]);
 
     serializeDateTimeFields(records as unknown as Record<string, unknown>[]);
@@ -377,7 +392,12 @@ export default async function partRoutes(app: FastifyInstance) {
       Circlip_Time: lastRow.Circlip_Time ?? circlipRow?.Circlip_Time ?? null,
     };
 
-    const event_timeline = buildEventTimeline(records as SamLogRowWithReason[], stationEvents);
+    const event_timeline = buildEventTimeline(
+      records as SamLogRowWithReason[],
+      stationEvents,
+      packedInfo.packed,
+      packedInfo.packedAt,
+    );
     req.log.info(`[part-trace] dmc=${dmc} → ${event_timeline.length} events in timeline`);
 
     const response: PartTraceResponse = {
@@ -385,7 +405,7 @@ export default async function partRoutes(app: FastifyInstance) {
       total_records: records.length,
       records,
       summary: {
-        state: classifyDisplayState(latest, hasCirclipFail, isPacked),
+        state: classifyDisplayState(latest, hasCirclipFail, packedInfo.packed),
         total_attempts: totalAttempts,
         reinspected,
         latest,
