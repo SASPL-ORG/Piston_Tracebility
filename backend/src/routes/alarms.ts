@@ -103,4 +103,51 @@ export default async function alarmRoutes(app: FastifyInstance) {
     };
     return response;
   });
+
+  // Spreadsheet export — same filters as /alarms but NO pagination: every
+  // matching alarm row. Returns CSV (opens directly in Excel / Google Sheets),
+  // with a UTF-8 BOM so Excel reads it in the right encoding.
+  app.get<{ Querystring: AlarmsQuery }>('/alarms/export', async (req, reply) => {
+    const sortKey = SORT_COLUMNS[req.query.sort || ''] || 'LogTime';
+    const order = req.query.order === 'asc' ? 'ASC' : 'DESC';
+
+    const pool = await getPool();
+    const request = pool.request();
+    const where = buildWhere(req.query, request);
+    const result = await request.query(`
+      SELECT ID, LogTime, BatchID, Alarm, Status
+      FROM dbo.PLC_Alarms WITH (NOLOCK)
+      ${where}
+      ORDER BY ${sortKey} ${order}
+    `);
+    const rows = result.recordset.map(shapeRow);
+
+    if (rows.length === 0) {
+      reply.status(404);
+      return { error: 'No alarms found for export' };
+    }
+
+    const COLUMNS: { header: string; pick: (r: AlarmListItem) => unknown }[] = [
+      { header: 'Log Time',       pick: (r) => r.logTime },
+      { header: 'Batch ID (DMC)', pick: (r) => r.batchId },
+      { header: 'Alarm',          pick: (r) => r.alarm },
+      { header: 'Status',         pick: (r) => r.status },
+    ];
+    const esc = (v: unknown): string => {
+      if (v === null || v === undefined) return '';
+      const s = String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+
+    const csvRows = [COLUMNS.map((c) => c.header).join(',')];
+    for (const r of rows) csvRows.push(COLUMNS.map((c) => esc(c.pick(r))).join(','));
+    const csv = '﻿' + csvRows.join('\n');
+
+    reply.header('Content-Type', 'text/csv; charset=utf-8');
+    reply.header(
+      'Content-Disposition',
+      `attachment; filename=plc_alarms_${new Date().toISOString().slice(0, 10)}.csv`,
+    );
+    return csv;
+  });
 }

@@ -32,7 +32,7 @@ function fmt(value: string | null | undefined): string {
 // show the customer-facing name everywhere in the UI and in PDF reports.
 function fmtPlant(value: string | null | undefined): string {
   if (value === null || value === undefined || value === '') return '-';
-  if (value === 'Sam Plant') return 'IPL Ring Assembly Plant - Anantapur';
+  if (value === 'Sam Plant') return 'IPL Ring Assembly Machine - 2';
   return value;
 }
 

@@ -1,13 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
-import { ArrowUpDown, ExternalLink, X } from 'lucide-react';
+import { ArrowUpDown, Download, ExternalLink, X } from 'lucide-react';
 import clsx from 'clsx';
 import DateRangePicker from './DateRangePicker';
 import Pagination from './Pagination';
 import {
   fetchAlarms,
   formatDateTime,
+  getAlarmsExportUrl,
   AlarmListItem,
   PaginatedResponse,
   AlarmStatus,
@@ -112,15 +113,32 @@ export default function AlarmsPanel({ onClose }: AlarmsPanelProps) {
             </span>
           )}
         </div>
-        {onClose && (
-          <button
-            onClick={onClose}
-            className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-md"
-            aria-label="Close PLC alarms panel"
+        <div className="flex items-center gap-2">
+          <a
+            href={getAlarmsExportUrl({ from, to, status, batch: batch || undefined, sort, order })}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={clsx(
+              'inline-flex items-center gap-2 px-3.5 py-1.5 text-sm font-medium rounded-md transition-colors',
+              data && data.total > 0
+                ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                : 'bg-gray-200 text-gray-400 pointer-events-none',
+            )}
+            title="Export the filtered alarms to a spreadsheet (CSV — opens in Excel / Google Sheets)"
           >
-            <X size={18} />
-          </button>
-        )}
+            <Download size={14} />
+            Export
+          </a>
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-md"
+              aria-label="Close PLC alarms panel"
+            >
+              <X size={18} />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Filters */}

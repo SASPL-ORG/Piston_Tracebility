@@ -202,8 +202,14 @@ export default function PartTrace() {
             <StatCard
               label="Final State"
               value={PART_STATE_LABEL[summary.state]}
-              icon={summary.state === 'PACKED' || summary.state === 'RING_OK' ? CheckCircle : XCircle}
-              color={summary.state === 'PACKED' || summary.state === 'RING_OK' ? 'bg-emerald-500' : 'bg-red-500'}
+              icon={['PACKED', 'COMPLETED', 'RING_OK'].includes(summary.state) ? CheckCircle : XCircle}
+              color={
+                summary.state === 'COMPLETED'
+                  ? 'bg-amber-500'
+                  : ['PACKED', 'RING_OK'].includes(summary.state)
+                    ? 'bg-emerald-500'
+                    : 'bg-red-500'
+              }
             />
           </div>
 

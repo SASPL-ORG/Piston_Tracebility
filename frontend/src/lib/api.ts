@@ -655,6 +655,23 @@ export function getExportUrl(params: ListParams): string {
   return `${BASE_URL}/export?${searchParams}`;
 }
 
+// Download URL for the PLC Alarms export (CSV, opens in Excel / Sheets). Same
+// filters as the alarms list; 'all' status is omitted (no filter).
+export function getAlarmsExportUrl(params: {
+  from?: string;
+  to?: string;
+  status?: string;
+  batch?: string;
+  sort?: string;
+  order?: string;
+}): string {
+  const searchParams = new URLSearchParams();
+  Object.entries(params).forEach(([key, val]) => {
+    if (val !== undefined && val !== '' && val !== 'all') searchParams.set(key, String(val));
+  });
+  return `${BASE_URL}/alarms/export?${searchParams}`;
+}
+
 // Display helpers ---------------------------------------------------------
 
 // Read the wall-clock components from a backend ISO string (YYYY-MM-DDTHH:MM:SS+ZZ:ZZ)
@@ -684,7 +701,7 @@ export const PART_STATE_LABEL: Record<PartState, string> = {
 // still holds the raw value ('Sam Plant'), but everywhere in the UI we show
 // the customer-facing label. Add more entries here if multi-plant rolls out.
 const PLANT_DISPLAY_NAME: Record<string, string> = {
-  'Sam Plant': 'IPL Ring Assembly Plant - Anantapur',
+  'Sam Plant': 'IPL Ring Assembly Machine - 2',
 };
 export function formatPlantName(raw: string | null | undefined): string {
   if (!raw) return '-';

@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { getPool } from '../db/connection.js';
-import { classifyState, hasCirclipRejection, isRejectionReason, stripDmcSeparators, canonicalizeDmcScan, DMC_SEPARATOR_CHARS } from '../db/state.js';
+import { classifyDisplayState, hasCirclipRejection, isRejectionReason, stripDmcSeparators, canonicalizeDmcScan, DMC_SEPARATOR_CHARS } from '../db/state.js';
 import { getHideBeforeCached } from '../utils/hideState.js';
 import { hiddenDmcAndClause } from '../utils/hiddenParts.js';
 import { serializeDateTime, serializeDateTimeFields } from '../db/datetime.js';
@@ -42,8 +42,8 @@ interface StationEventRow {
 
 const RING_ASSEMBLY_SUBSTATIONS = [
   'Expander Ring',
-  'Bottom Ring',
   'Bottom Rail Ring',
+  'Top Rail Ring',
   'Second Ring',
   'Top Ring',
 ];
@@ -299,6 +299,23 @@ function sanitizeForFilename(s: string): string {
   return s.replace(/[<>:"|?*\\/\s]/g, '_').slice(0, 80);
 }
 
+// Whether this DMC was physically scanned at the Zebra packing station —
+// i.e. it exists in Packed_Log_TEST as a non-reject scan. Mirrors the
+// PACKED_LOG_JOIN_SQL that Lists/Dashboard use, so Part Trace agrees with them:
+//   COMPLETED = line-finished (sitting on the output conveyor), not yet scanned
+//   PACKED    = scanned at packing
+async function fetchIsPacked(dmc: string | null | undefined): Promise<boolean> {
+  if (!dmc) return false;
+  const pool = await getPool();
+  const r = await pool
+    .request()
+    .input('dmc', dmc)
+    .query(
+      'SELECT TOP 1 1 AS packed FROM dbo.Packed_Log_TEST WITH (NOLOCK) WHERE DMC = @dmc AND Is_Reject = 0',
+    );
+  return r.recordset.length > 0;
+}
+
 export default async function partRoutes(app: FastifyInstance) {
   app.get<{ Params: PartParams }>('/part/:dmc', async (req, reply) => {
     const { dmc } = req.params;
@@ -317,7 +334,10 @@ export default async function partRoutes(app: FastifyInstance) {
     // Per-station events are keyed by the STORED DMC (records[0].DMC), which
     // matches Station_Events exactly — the request param may be a raw scan that
     // only matched via the separator-insensitive fallback.
-    const stationEvents = await fetchStationEvents(records[0].DMC);
+    const [stationEvents, isPacked] = await Promise.all([
+      fetchStationEvents(records[0].DMC),
+      fetchIsPacked(records[0].DMC),
+    ]);
 
     serializeDateTimeFields(records as unknown as Record<string, unknown>[]);
     const lastRow = records[records.length - 1];
@@ -365,7 +385,7 @@ export default async function partRoutes(app: FastifyInstance) {
       total_records: records.length,
       records,
       summary: {
-        state: classifyState(latest, hasCirclipFail),
+        state: classifyDisplayState(latest, hasCirclipFail, isPacked),
         total_attempts: totalAttempts,
         reinspected,
         latest,
