@@ -163,11 +163,19 @@ export async function indexMaster(
     okFlag: parsed.okFlag,
   });
 
+  // picture_no is part of UQ_Image_Resolved (DMC, inspection_type, ring_count,
+  // picture_no) and MUST be unique per master piece. The CV-X source counter
+  // RESETS to 1 every capture session, so reusing it collides with an earlier
+  // master capture and the INSERT is silently rejected — the re-scanned master
+  // then never appears on the Master Data page. Use the next free number for
+  // this master instead (monotonic, always unique).
+  const pictureNo = await nextPictureNo(parsed.fullDmc, parsed.inspectionType, null);
+
   await insertImageRow({
     dmc: parsed.fullDmc,
     inspectionType: parsed.inspectionType,
     ringCount: null,
-    pictureNo: parsed.sourceCounter,
+    pictureNo,
     filePath: destPath,
     capturedAt: parsed.capturedAt,
     okFlag: parsed.okFlag,
