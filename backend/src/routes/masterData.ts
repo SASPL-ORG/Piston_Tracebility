@@ -153,49 +153,38 @@ export default async function masterDataRoutes(app: FastifyInstance) {
           ORDER BY captured_at ASC, picture_no ASC
         `);
 
-      // Group rows by session_folder. Each session_folder represents one
-      // CV-X capture session = one "attempt" card on the page. The
-      // attempt's timestamp is the earliest captured_at within it.
-      type SessionAcc = {
-        session_folder: string;
-        first_captured_at: Date;
-        images: InspectionAttempt['images'];
-      };
-      const bySession = new Map<string, SessionAcc>();
-      for (const r of imagesResult.recordset as {
+      // One "attempt" = images_per_attempt consecutive captures, ordered by
+      // capture time. A Snap Ring master is 1 image/attempt, so EACH capture
+      // becomes its own attempt card with its own timestamp; a Ring master is
+      // 25/attempt, so every 25 images form one attempt. This is more accurate
+      // than grouping by CV-X session_folder, which bundles multiple operator
+      // trials (run minutes apart) into a single card. Rows already arrive
+      // ordered by captured_at ASC, picture_no ASC.
+      const perAttempt = Math.max(1, m.images_per_attempt || 1);
+      const rows = imagesResult.recordset as {
         id: number;
         session_folder: string | null;
         picture_no: number;
         ok_flag: boolean | number | null;
         camera_id: string | null;
         captured_at: Date;
-      }[]) {
-        const sf = r.session_folder ?? '__no_session__';
-        let acc = bySession.get(sf);
-        if (!acc) {
-          acc = { session_folder: sf, first_captured_at: r.captured_at, images: [] };
-          bySession.set(sf, acc);
-        } else if (r.captured_at < acc.first_captured_at) {
-          acc.first_captured_at = r.captured_at;
-        }
-        acc.images.push({
-          id: r.id,
-          picture_no: r.picture_no,
-          ok_flag: r.ok_flag === true || r.ok_flag === 1 ? 1 : 0,
-          camera_id: r.camera_id,
-          captured_at: r.captured_at.toISOString(),
+      }[];
+      const attempts: InspectionAttempt[] = [];
+      for (let i = 0; i < rows.length; i += perAttempt) {
+        const chunk = rows.slice(i, i + perAttempt);
+        attempts.push({
+          attempt_no: attempts.length + 1,
+          session_folder: chunk[0].session_folder ?? '__no_session__',
+          captured_at: chunk[0].captured_at.toISOString(),
+          images: chunk.map((r) => ({
+            id: r.id,
+            picture_no: r.picture_no,
+            ok_flag: r.ok_flag === true || r.ok_flag === 1 ? 1 : 0,
+            camera_id: r.camera_id,
+            captured_at: r.captured_at.toISOString(),
+          })),
         });
       }
-
-      const sortedSessions = [...bySession.values()].sort(
-        (a, b) => a.first_captured_at.getTime() - b.first_captured_at.getTime(),
-      );
-      const attempts: InspectionAttempt[] = sortedSessions.map((s, i) => ({
-        attempt_no: i + 1,
-        session_folder: s.session_folder,
-        captured_at: s.first_captured_at.toISOString(),
-        images: s.images,
-      }));
 
       const response: MasterInspectionResponse = {
         catalog,
