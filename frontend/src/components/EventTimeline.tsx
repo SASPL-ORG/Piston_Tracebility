@@ -48,6 +48,40 @@ function ConditionalNode() {
   );
 }
 
+// The per-sub-station list under a node (e.g. the 5 ring-assembly stations).
+// Rendered for ANY node that carries substations — whether the parent node is
+// still grey/intermediate (piston hasn't cleared the zone) or has turned green/
+// checkpoint (all done), so the individual station statuses never disappear.
+function SubStationList({ step }: { step: EventTimelineStep }) {
+  if (!step.substations || step.substations.length === 0) return null;
+  return (
+    <ul className="mt-1.5 space-y-1 pl-3 border-l border-gray-200 ml-1">
+      {step.substations.map((sub) => {
+        const done = sub.status === 'OK';
+        const failed = sub.status === 'FAIL';
+        return (
+          <li key={sub.label} className="flex items-center gap-2 text-xs">
+            {done ? (
+              <CheckCircle size={11} className="text-emerald-500 shrink-0" />
+            ) : failed ? (
+              <XCircle size={11} className="text-red-500 shrink-0" />
+            ) : (
+              <Circle size={6} className="text-gray-300 fill-gray-300 shrink-0 mx-[2.5px]" />
+            )}
+            <span className={clsx(done ? 'text-gray-700' : failed ? 'text-red-700 font-medium' : 'text-gray-500')}>
+              {sub.label}
+            </span>
+            {sub.timestamp && (
+              <span className="text-gray-400 tabular-nums">· {formatDateTime(sub.timestamp)}</span>
+            )}
+            {failed && sub.reason && <span className="text-red-500">· {sub.reason}</span>}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function CheckpointBody({ step }: { step: EventTimelineStep }) {
   const status = step.status ?? 'OK';
   const styles = STATUS_STYLES[status] ?? STATUS_STYLES.OK;
@@ -76,6 +110,7 @@ function CheckpointBody({ step }: { step: EventTimelineStep }) {
           <span className="font-medium">Reason:</span> {step.reason}
         </p>
       )}
+      <SubStationList step={step} />
     </div>
   );
 }
@@ -84,32 +119,7 @@ function IntermediateBody({ step }: { step: EventTimelineStep }) {
   return (
     <div className="flex-1 -mt-0.5 pb-1">
       <p className="text-sm text-gray-500">{step.label}</p>
-      {step.substations && step.substations.length > 0 && (
-        <ul className="mt-1.5 space-y-1 pl-3 border-l border-gray-200 ml-1">
-          {step.substations.map((sub) => {
-            const done = sub.status === 'OK';
-            const failed = sub.status === 'FAIL';
-            return (
-              <li key={sub.label} className="flex items-center gap-2 text-xs">
-                {done ? (
-                  <CheckCircle size={11} className="text-emerald-500 shrink-0" />
-                ) : failed ? (
-                  <XCircle size={11} className="text-red-500 shrink-0" />
-                ) : (
-                  <Circle size={6} className="text-gray-300 fill-gray-300 shrink-0 mx-[2.5px]" />
-                )}
-                <span className={clsx(done ? 'text-gray-700' : failed ? 'text-red-700 font-medium' : 'text-gray-500')}>
-                  {sub.label}
-                </span>
-                {sub.timestamp && (
-                  <span className="text-gray-400 tabular-nums">· {formatDateTime(sub.timestamp)}</span>
-                )}
-                {failed && sub.reason && <span className="text-red-500">· {sub.reason}</span>}
-              </li>
-            );
-          })}
-        </ul>
-      )}
+      <SubStationList step={step} />
     </div>
   );
 }
