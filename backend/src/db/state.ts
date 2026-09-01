@@ -20,10 +20,16 @@ export type PartState =
   | 'RING_OK'
   | 'RING_NG'
   | 'CIRCLIP_SCRAP'
-  | 'IN_PROGRESS';
+  | 'IN_PROGRESS'
+  // ABORTED — only a loading scan exists and the piston never reached the
+  // circlip station (no circlip data). It was picked / faulted at loading, so
+  // it is NOT genuinely in progress. Split out per the client's rule: a piston
+  // only counts as IN_PROGRESS once it has reached circlip assembly.
+  | 'ABORTED';
 
 export interface SamLogRowForState {
   Circlip_Result: string | null;
+  Circlip_Time?: string | null;
   Ring_Result: string | null;
   Unloading_Time: string | null;
   Result: string | null;
@@ -117,7 +123,11 @@ export function classifyState(latest: SamLogRowForState, hasCirclipFail: boolean
   // explicit PASS always wins over a stale reason string.
   if (ring === 'FAIL' || isRejectionReason(latest.Ring_Rejection_Reason)) return 'RING_NG';
   if (unloaded) return 'PACKED';
-  return 'IN_PROGRESS';
+  // Reached the circlip station (any circlip data recorded) → genuinely in
+  // progress. Only a loading scan with no circlip data → ABORTED (picked /
+  // faulted at loading).
+  const reachedCirclip = latest.Circlip_Result != null || latest.Circlip_Time != null;
+  return reachedCirclip ? 'IN_PROGRESS' : 'ABORTED';
 }
 
 // Display-level wrapper around classifyState — splits the line-side
@@ -155,7 +165,12 @@ export const STATE_CASE_SQL = `CASE
   WHEN l.Ring_Result = 'PASS' THEN 'RING_OK'
   WHEN l.Ring_Result = 'FAIL' OR ${rejectionReasonSql('l.Ring_Rejection_Reason')} THEN 'RING_NG'
   WHEN l.Unloading_Time IS NOT NULL AND l.Unloading_Time <> '' THEN 'PACKED'
-  ELSE 'IN_PROGRESS'
+  -- Reached the circlip station (any circlip data recorded) but not finished →
+  -- genuinely IN_PROGRESS. Only a loading scan with no circlip data → ABORTED
+  -- (picked / faulted at loading), per the client's circlip-assembly rule.
+  WHEN l.Circlip_Result IS NOT NULL OR l.Circlip_Time IS NOT NULL
+       OR p.has_circlip_pass = 1 OR p.has_circlip_fail = 1 OR p.has_circlip_reject = 1 THEN 'IN_PROGRESS'
+  ELSE 'ABORTED'
 END`;
 
 // LEFT JOIN against Packed_Log_TEST that surfaces a 0/1 "is_packed" flag

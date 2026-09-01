@@ -10,6 +10,9 @@ const STATE_STYLE: Record<PartState, string> = {
   RING_NG: 'bg-red-50 text-red-700 border-red-200',
   CIRCLIP_SCRAP: 'bg-red-100 text-red-800 border-red-300',
   IN_PROGRESS: 'bg-slate-50 text-slate-600 border-slate-200',
+  // Aborted = only a loading scan, never reached circlip assembly (picked/faulted
+  // at loading). Amber/orange so it reads as "not a real reject, just abandoned".
+  ABORTED: 'bg-amber-50 text-amber-700 border-amber-200',
 };
 
 export default function StateBadge({ state }: { state: PartState }) {

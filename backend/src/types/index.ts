@@ -79,6 +79,7 @@ export interface DashboardKpis {
   circlip_fail: number;
   ring_fail: number;
   in_progress: number;
+  aborted: number;
   circlip_reinspected: number;
   ring_reinspected: number;
   pass_rate: number;
@@ -146,6 +147,7 @@ export type ListType =
   // separately selectable from the UI.
   | 'reinspected'
   | 'in_progress'
+  | 'aborted'
   | 'packed';
 
 export interface ListQueryParams {

@@ -96,6 +96,7 @@ export default async function dashboardRoutes(app: FastifyInstance) {
     // Bucket priority is encoded once and reused so the totals stay
     // consistent across queries.
     const BUCKET_CASE = `CASE
+      WHEN ${STATE_CASE_SQL} = 'ABORTED' THEN 'aborted'
       WHEN ${STATE_CASE_SQL} = 'IN_PROGRESS' THEN 'in_progress'
       WHEN ${STATE_CASE_SQL} = 'CIRCLIP_SCRAP' THEN 'circlip_fail'
       WHEN ${STATE_CASE_SQL} = 'RING_NG' THEN 'ring_fail'
@@ -124,6 +125,7 @@ export default async function dashboardRoutes(app: FastifyInstance) {
         SUM(CASE WHEN ${BUCKET_CASE} = 'circlip_fail' THEN 1 ELSE 0 END) AS circlip_fail,
         SUM(CASE WHEN ${BUCKET_CASE} = 'ring_fail' THEN 1 ELSE 0 END) AS ring_fail,
         SUM(CASE WHEN ${BUCKET_CASE} = 'in_progress' THEN 1 ELSE 0 END) AS in_progress,
+        SUM(CASE WHEN ${BUCKET_CASE} = 'aborted' THEN 1 ELSE 0 END) AS aborted,
         SUM(CASE WHEN ${BUCKET_CASE} = 'circlip_reinspected' THEN 1 ELSE 0 END) AS circlip_reinspected,
         SUM(CASE WHEN ${BUCKET_CASE} = 'ring_reinspected' THEN 1 ELSE 0 END) AS ring_reinspected
       FROM latest l
@@ -183,6 +185,7 @@ export default async function dashboardRoutes(app: FastifyInstance) {
       circlip_fail: dmcRow.circlip_fail || 0,
       ring_fail: dmcRow.ring_fail || 0,
       in_progress: dmcRow.in_progress || 0,
+      aborted: dmcRow.aborted || 0,
       circlip_reinspected: dmcRow.circlip_reinspected || 0,
       ring_reinspected: dmcRow.ring_reinspected || 0,
     };
@@ -194,6 +197,7 @@ export default async function dashboardRoutes(app: FastifyInstance) {
       'IN_PROGRESS',
       'RING_NG',
       'CIRCLIP_SCRAP',
+      'ABORTED',
     ];
     const byState = new Map<PartState, number>(
       stateResult.recordset.map((r: { state: PartState; count: number }) => [r.state, r.count]),
@@ -216,6 +220,7 @@ export default async function dashboardRoutes(app: FastifyInstance) {
         circlip_fail: kpiRow.circlip_fail || 0,
         ring_fail: kpiRow.ring_fail || 0,
         in_progress: kpiRow.in_progress || 0,
+        aborted: kpiRow.aborted || 0,
         circlip_reinspected: kpiRow.circlip_reinspected || 0,
         ring_reinspected: kpiRow.ring_reinspected || 0,
         pass_rate: total > 0 ? Math.round((okCount / total) * 1000) / 10 : 0,

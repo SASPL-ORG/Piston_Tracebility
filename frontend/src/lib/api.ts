@@ -29,7 +29,8 @@ export type PartState =
   | 'RING_OK'
   | 'RING_NG'
   | 'CIRCLIP_SCRAP'
-  | 'IN_PROGRESS';
+  | 'IN_PROGRESS'
+  | 'ABORTED';    // Only a loading scan; never reached circlip assembly (picked/faulted at loading)
 
 export interface SamLogRecord {
   Date_Time: string | null;
@@ -109,6 +110,7 @@ export interface DashboardKpis {
   circlip_fail: number;
   ring_fail: number;
   in_progress: number;
+  aborted: number;
   circlip_reinspected: number;
   ring_reinspected: number;
   pass_rate: number;
@@ -145,6 +147,7 @@ export type ListSummaryBucket =
   | 'circlip_fail'
   | 'ring_fail'
   | 'in_progress'
+  | 'aborted'
   | 'circlip_reinspected'
   | 'ring_reinspected';
 
@@ -273,6 +276,7 @@ export type ListType =
   // Single union bucket — covers both snap-ring AND ring re-inspection.
   | 'reinspected'
   | 'in_progress'
+  | 'aborted'
   | 'packed';
 
 export interface ListParams {
@@ -695,6 +699,7 @@ export const PART_STATE_LABEL: Record<PartState, string> = {
   RING_NG: 'Ring Rejected',
   CIRCLIP_SCRAP: 'Snap Ring Scrap',
   IN_PROGRESS: 'In Progress',
+  ABORTED: 'Aborted',
 };
 
 // Display-time rename of the customer's plant. The DB column SAM_Log.Plant_Id

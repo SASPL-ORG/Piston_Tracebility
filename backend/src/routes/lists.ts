@@ -123,6 +123,7 @@ function buildTimeOfDayWhere(
 //   total = passed + circlip_fail + ring_fail + in_progress
 //         + circlip_reinspected + ring_reinspected
 const SUMMARY_BUCKET_CASE = `CASE
+  WHEN ${STATE_CASE_SQL} = 'ABORTED' THEN 'aborted'
   WHEN ${STATE_CASE_SQL} = 'IN_PROGRESS' THEN 'in_progress'
   WHEN ${STATE_CASE_SQL} = 'CIRCLIP_SCRAP' THEN 'circlip_fail'
   WHEN ${STATE_CASE_SQL} = 'RING_NG' THEN 'ring_fail'
@@ -143,6 +144,8 @@ function buildTypeWhere(type: string | undefined): string {
       return "state = 'RING_NG'";
     case 'in_progress':
       return "state = 'IN_PROGRESS'";
+    case 'aborted':
+      return "state = 'ABORTED'";
     // Re-Inspection = parts ultimately SAVED by either snap-ring OR ring
     // re-inspection. Union covers both flavors; parts that needed
     // re-inspection but still failed end up under ring_rejected /
@@ -174,7 +177,7 @@ function buildInClause(
   return `(${parts.join(' OR ')})`;
 }
 
-const STATE_VALUES = ['PACKED', 'COMPLETED', 'RING_OK', 'RING_NG', 'CIRCLIP_SCRAP', 'IN_PROGRESS'] as const;
+const STATE_VALUES = ['PACKED', 'COMPLETED', 'RING_OK', 'RING_NG', 'CIRCLIP_SCRAP', 'IN_PROGRESS', 'ABORTED'] as const;
 const RESULT_VALUES = ['PASS', 'FAIL', 'BLANK'] as const;
 
 function buildBaseCte(query: ListQuery, request: import('mssql').Request): string {

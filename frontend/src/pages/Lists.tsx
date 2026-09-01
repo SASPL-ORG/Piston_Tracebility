@@ -52,12 +52,13 @@ const TYPE_OPTIONS: { value: ListType; label: string }[] = [
   // selectable from the dropdown.
   { value: 'reinspected', label: 'Re-Inspection' },
   { value: 'in_progress', label: 'In Progress' },
+  { value: 'aborted', label: 'Aborted' },
   { value: 'packed', label: 'Completed' },
 ];
 
 // Column-filter option lists — these must match the backend's allow-list
 // (STATE_VALUES, RESULT_VALUES in backend/src/routes/lists.ts).
-const STATE_FILTER_OPTIONS = (['PACKED', 'RING_OK', 'RING_NG', 'CIRCLIP_SCRAP', 'IN_PROGRESS'] as PartState[]).map(
+const STATE_FILTER_OPTIONS = (['PACKED', 'RING_OK', 'RING_NG', 'CIRCLIP_SCRAP', 'IN_PROGRESS', 'ABORTED'] as PartState[]).map(
   (s) => ({ value: s, label: PART_STATE_LABEL[s] }),
 );
 const RESULT_FILTER_OPTIONS = [
@@ -180,6 +181,7 @@ const SUMMARY_ROWS: { bucket: string; label: string; failureType?: FailureType }
   { bucket: 'circlip_fail',          label: 'Snap Ring Fail', failureType: 'circlip' },
   { bucket: 'ring_fail',             label: 'Ring Fail',      failureType: 'ring' },
   { bucket: 'in_progress',           label: 'In Progress' },
+  { bucket: 'aborted',               label: 'Aborted' },
   { bucket: 'circlip_reinspected',   label: 'Snap Ring Re-Inspection' },
   { bucket: 'ring_reinspected',      label: 'Ring Re-Inspection' },
 ];
