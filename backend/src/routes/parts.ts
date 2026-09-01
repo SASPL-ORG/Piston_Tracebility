@@ -85,9 +85,11 @@ function buildEventTimeline(
     reason: null,
   });
 
-  // Snap-ring branch — gated on Circlip_Time being stamped.
-  if (!earliest.Circlip_Time && !isRejectionReason(earliest.Circlip_Rejection_Reason)) return timeline;
-
+  // The FULL journey is always emitted so a stuck / in-progress part still
+  // lists every stage — stages that actually happened render as green
+  // checkpoints (with a time), stages not yet reached render as plain grey
+  // markers. We only stop early on a TERMINAL outcome (snap-ring scrap or ring
+  // reject), never just because a stage hasn't happened yet.
   timeline.push({ step: 4, label: 'Anodizing Presence',         type: 'intermediate' });
 
   // Snap ring ASSEMBLY — the one station SAM_Log doesn't record. If Node-RED
@@ -113,25 +115,34 @@ function buildEventTimeline(
   // A rejection reason is a fail even when Circlip_Result was never written —
   // reasons raised before the inspection completes (recipe/barcode mismatch,
   // abnormal part, groove anodizing missing) stop the part with a NULL result.
+  // Snap Ring Inspection — green when the circlip stage actually happened (a
+  // time, a result, or a rejection reason); grey/pending otherwise. A rejection
+  // reason counts as a fail even when Circlip_Result was never written
+  // (recipe/barcode mismatch, abnormal part, groove anodizing missing).
   const circlipFail =
     earliest.Circlip_Result === 'FAIL' || isRejectionReason(earliest.Circlip_Rejection_Reason);
-  timeline.push({
-    step: 7,
-    label: 'Snap Ring Inspection',
-    type: 'checkpoint',
-    timestamp: earliest.Circlip_Time,
-    status: circlipFail ? 'FAIL' : 'OK',
-    reason: circlipFail ? (earliest.Circlip_Rejection_Reason ?? null) : null,
-  });
-
-  if (circlipFail) {
-    timeline.push({ step: 8, label: 'Snap Ring Rejection Conveyor', type: 'conditional' });
-    return timeline;
+  const circlipDone =
+    !!earliest.Circlip_Time || earliest.Circlip_Result != null || circlipFail;
+  if (circlipDone) {
+    timeline.push({
+      step: 7,
+      label: 'Snap Ring Inspection',
+      type: 'checkpoint',
+      timestamp: earliest.Circlip_Time,
+      status: circlipFail ? 'FAIL' : 'OK',
+      reason: circlipFail ? (earliest.Circlip_Rejection_Reason ?? null) : null,
+    });
+    // Snap-ring scrap is terminal — the part never reaches the ring stations.
+    if (circlipFail) {
+      timeline.push({ step: 8, label: 'Snap Ring Rejection Conveyor', type: 'conditional' });
+      return timeline;
+    }
+  } else {
+    timeline.push({ step: 7, label: 'Snap Ring Inspection', type: 'intermediate' });
   }
 
-  // Ring branch — gated on the latest row having Ring_Time stamped.
-  if (!latest.Ring_Time) return timeline;
-
+  // Ring stations — always listed (descriptive). No early return when the ring
+  // hasn't happened yet, so Unloading / Packing still appear as pending.
   timeline.push({
     step: 10,
     label: 'Ring Assembly Station',
@@ -140,24 +151,31 @@ function buildEventTimeline(
   });
   timeline.push({ step: 12, label: 'DMC3 — Barcode Scan', type: 'intermediate' });
 
+  // Ring Inspection — green when the ring stage happened; grey/pending otherwise.
   const ringFail =
     latest.Ring_Result === 'FAIL' || isRejectionReason(latest.Ring_Rejection_Reason);
-  timeline.push({
-    step: 13,
-    label: 'Ring Inspection',
-    type: 'checkpoint',
-    timestamp: latest.Ring_Time,
-    status: ringFail ? 'FAIL' : 'OK',
-    reason: ringFail ? (latest.Ring_Rejection_Reason ?? null) : null,
-    attempts: latest.Ring_Count ?? 1,
-  });
-
-  if (ringFail) {
-    timeline.push({ step: 14, label: 'Ring Rejection Conveyor', type: 'conditional' });
-    return timeline;
+  const ringDone = !!latest.Ring_Time || latest.Ring_Result != null || ringFail;
+  if (ringDone) {
+    timeline.push({
+      step: 13,
+      label: 'Ring Inspection',
+      type: 'checkpoint',
+      timestamp: latest.Ring_Time,
+      status: ringFail ? 'FAIL' : 'OK',
+      reason: ringFail ? (latest.Ring_Rejection_Reason ?? null) : null,
+      attempts: latest.Ring_Count ?? 1,
+    });
+    // Ring reject is terminal.
+    if (ringFail) {
+      timeline.push({ step: 14, label: 'Ring Rejection Conveyor', type: 'conditional' });
+      return timeline;
+    }
+  } else {
+    timeline.push({ step: 13, label: 'Ring Inspection', type: 'intermediate' });
   }
 
-  // Unloading — the part leaves the inspection cell (Unloading_Time stamped).
+  // Unloading — green when the part left the inspection cell (Unloading_Time
+  // stamped); grey/pending otherwise.
   if (latest.Unloading_Time) {
     timeline.push({
       step: 15,
@@ -167,25 +185,25 @@ function buildEventTimeline(
       status: 'OK',
       reason: null,
     });
+  } else {
+    timeline.push({ step: 15, label: 'Unloading Time', type: 'intermediate' });
   }
 
   // Packing Station — the piston counts as PACKED only once it's SCANNED at the
   // Zebra packing station (a non-reject row in Packed_Log_TEST). Until then it
   // has merely left the cell onto the output conveyor ("Completed"), so show the
   // packing step as a pending/grey marker rather than a done checkpoint.
-  if (latest.Unloading_Time) {
-    if (isPacked) {
-      timeline.push({
-        step: 16,
-        label: 'Packing Station',
-        type: 'checkpoint',
-        timestamp: packedAt ?? latest.Unloading_Time,
-        status: 'COMPLETED',
-        reason: null,
-      });
-    } else {
-      timeline.push({ step: 16, label: 'Packing Station', type: 'intermediate' });
-    }
+  if (isPacked) {
+    timeline.push({
+      step: 16,
+      label: 'Packing Station',
+      type: 'checkpoint',
+      timestamp: packedAt ?? latest.Unloading_Time,
+      status: 'COMPLETED',
+      reason: null,
+    });
+  } else {
+    timeline.push({ step: 16, label: 'Packing Station', type: 'intermediate' });
   }
 
   return timeline;
