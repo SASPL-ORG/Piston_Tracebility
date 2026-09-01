@@ -450,7 +450,10 @@ export default async function partRoutes(app: FastifyInstance) {
       total_records: records.length,
       records,
       summary: {
-        state: classifyDisplayState(latest, hasCirclipFail, packedInfo.packed),
+        // reachedAssembly = St6 (snap-ring assembly) logged for this DMC — the
+        // true "reached circlip assembly" signal, so a just-assembled piston
+        // reads IN_PROGRESS instead of a transient ABORTED (matches the timeline).
+        state: classifyDisplayState(latest, hasCirclipFail, packedInfo.packed, stationEvents.has(6)),
         total_attempts: totalAttempts,
         reinspected,
         latest,

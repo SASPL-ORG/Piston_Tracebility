@@ -106,7 +106,17 @@ function plcMarkedGood(latest: SamLogRowForState): boolean {
 // packed the piston into a bin. Callers that need the display-level
 // state (split into COMPLETED vs PACKED) should compose this with their
 // own packed-log check.
-export function classifyState(latest: SamLogRowForState, hasCirclipFail: boolean): PartState {
+// `reachedAssembly` = the piston has an St6 (snap-ring assembly) completion in
+// Station_Events. SAM_Log's Circlip_Result/Circlip_Time come from the circlip
+// INSPECTION (one station later), which is written ~20s after assembly — so a
+// live piston that has already been assembled but not yet inspected would look
+// ABORTED for that gap. The St6 event is the true "reached circlip assembly"
+// signal (the client's own rule), so it promotes such a part to IN_PROGRESS.
+export function classifyState(
+  latest: SamLogRowForState,
+  hasCirclipFail: boolean,
+  reachedAssembly = false,
+): PartState {
   // Honour the PLC's final verdict first. An operator-override part has
   // Circlip_Result=FAIL recorded but Result=PASS and Unloading_Time set —
   // we treat it as PACKED.
@@ -123,10 +133,11 @@ export function classifyState(latest: SamLogRowForState, hasCirclipFail: boolean
   // explicit PASS always wins over a stale reason string.
   if (ring === 'FAIL' || isRejectionReason(latest.Ring_Rejection_Reason)) return 'RING_NG';
   if (unloaded) return 'PACKED';
-  // Reached the circlip station (any circlip data recorded) → genuinely in
-  // progress. Only a loading scan with no circlip data → ABORTED (picked /
-  // faulted at loading).
-  const reachedCirclip = latest.Circlip_Result != null || latest.Circlip_Time != null;
+  // Reached the circlip assembly (St6 event) OR has circlip inspection data →
+  // genuinely IN_PROGRESS. Only a loading scan with neither → ABORTED
+  // (picked / faulted at loading, before ever being assembled).
+  const reachedCirclip =
+    reachedAssembly || latest.Circlip_Result != null || latest.Circlip_Time != null;
   return reachedCirclip ? 'IN_PROGRESS' : 'ABORTED';
 }
 
@@ -139,8 +150,9 @@ export function classifyDisplayState(
   latest: SamLogRowForState,
   hasCirclipFail: boolean,
   isPacked: boolean,
+  reachedAssembly = false,
 ): PartState {
-  const lineState = classifyState(latest, hasCirclipFail);
+  const lineState = classifyState(latest, hasCirclipFail, reachedAssembly);
   if (lineState !== 'PACKED') return lineState;
   return isPacked ? 'PACKED' : 'COMPLETED';
 }
@@ -165,11 +177,14 @@ export const STATE_CASE_SQL = `CASE
   WHEN l.Ring_Result = 'PASS' THEN 'RING_OK'
   WHEN l.Ring_Result = 'FAIL' OR ${rejectionReasonSql('l.Ring_Rejection_Reason')} THEN 'RING_NG'
   WHEN l.Unloading_Time IS NOT NULL AND l.Unloading_Time <> '' THEN 'PACKED'
-  -- Reached the circlip station (any circlip data recorded) but not finished →
-  -- genuinely IN_PROGRESS. Only a loading scan with no circlip data → ABORTED
-  -- (picked / faulted at loading), per the client's circlip-assembly rule.
+  -- Reached the circlip ASSEMBLY (St6 Station_Events, p.has_assembly) or has any
+  -- circlip inspection data → genuinely IN_PROGRESS. Only a loading scan with
+  -- neither → ABORTED (picked / faulted at loading, before assembly). has_assembly
+  -- is the true "reached assembly" signal; circlip inspection lands ~20s later,
+  -- so without it a freshly-assembled live piston would flash as ABORTED.
   WHEN l.Circlip_Result IS NOT NULL OR l.Circlip_Time IS NOT NULL
-       OR p.has_circlip_pass = 1 OR p.has_circlip_fail = 1 OR p.has_circlip_reject = 1 THEN 'IN_PROGRESS'
+       OR p.has_circlip_pass = 1 OR p.has_circlip_fail = 1 OR p.has_circlip_reject = 1
+       OR p.has_assembly = 1 THEN 'IN_PROGRESS'
   ELSE 'ABORTED'
 END`;
 
@@ -402,7 +417,7 @@ export function buildLatestPerDmcCte(extraConditions: string[]): string {
     SELECT * FROM dbo.SAM_Log WITH (NOLOCK)
     ${where}
   ),
-  per_dmc AS (
+  per_dmc_base AS (
     SELECT
       DMC,
       MAX(Ring_Count) AS max_ring_count,
@@ -423,6 +438,19 @@ export function buildLatestPerDmcCte(extraConditions: string[]): string {
       MIN(CASE WHEN Circlip_Result = 'FAIL' THEN Circlip_Time END) AS first_fail_circlip_time
     FROM filtered
     GROUP BY DMC
+  ),
+  -- Snap-ring ASSEMBLY signal from Station_Events (St6). This is the true
+  -- "reached circlip assembly" marker — it fires ~20s before the circlip
+  -- inspection result lands in SAM_Log — so a live, freshly-assembled piston
+  -- is classified IN_PROGRESS instead of momentarily ABORTED. Keyed by DMC
+  -- (unique per piston), so it's line-agnostic.
+  assembled AS (
+    SELECT DISTINCT DMC FROM dbo.Station_Events WITH (NOLOCK) WHERE Station_No = 6
+  ),
+  per_dmc AS (
+    SELECT b.*, CASE WHEN a.DMC IS NOT NULL THEN 1 ELSE 0 END AS has_assembly
+    FROM per_dmc_base b
+    LEFT JOIN assembled a ON a.DMC = b.DMC
   ),
   latest AS (
     SELECT f.*
