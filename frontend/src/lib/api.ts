@@ -167,6 +167,8 @@ export interface ListSummaryParams {
   from?: string;
   to?: string;
   plant?: string;
+  // Machine/line selector: '1' | '2' | undefined (all lines).
+  line?: string;
   time_from?: string;
   time_to?: string;
 }
@@ -268,16 +270,37 @@ export interface PartResponse {
 export function fetchDashboard(
   from: string,
   to: string,
-  options?: { plant?: string; shift?: ShiftScope },
+  options?: { plant?: string; shift?: ShiftScope; line?: LineScope },
 ): Promise<DashboardResponse> {
   const params = new URLSearchParams({ from, to });
   if (options?.plant) params.set('plant', options.plant);
   if (options?.shift && options.shift !== 'all') params.set('shift', options.shift);
+  if (options?.line && options.line !== 'all') params.set('line', options.line);
   return fetchJson(`/dashboard?${params}`);
 }
 
 export function fetchPlants(): Promise<string[]> {
   return fetchJson('/plants');
+}
+
+// Machine/line selector. 'all' = both machines combined; '1'/'2' = one machine.
+export type LineScope = 'all' | '1' | '2';
+
+export interface LineInfo {
+  line_id: number;
+  parts: number;
+  last_seen: string | null;
+}
+
+// Distinct machine lines that actually have data — used to decide whether to
+// show the Machine toggle at all (a single-machine install won't).
+export function fetchLines(): Promise<LineInfo[]> {
+  return fetchJson('/lines');
+}
+
+// Customer-facing name for a machine line. Mirrors formatPlantName's intent.
+export function formatLineName(lineId: number | string): string {
+  return `Machine ${lineId}`;
 }
 
 export type ListType =
@@ -296,6 +319,8 @@ export interface ListParams {
   from?: string;
   to?: string;
   plant?: string;
+  // Machine/line selector: '1' | '2' | undefined (all lines).
+  line?: string;
   page?: number;
   size?: number;
   sort?: string;

@@ -25,8 +25,10 @@ import {
   PaginatedResponse,
   ListType,
   ShiftScope,
+  LineScope,
 } from '../lib/api';
 import { useSessionState } from '../lib/useSessionState';
+import MachineSelector from '../components/MachineSelector';
 
 // A part sits in IN_PROGRESS until a ring result is written. If the ring
 // station never records one (part pulled off the line, line stopped mid-cycle,
@@ -235,6 +237,8 @@ export default function Lists() {
   const [from, setFrom] = useSessionState('lists/from', today);
   const [to, setTo] = useSessionState('lists/to', today);
   const [plant, setPlant] = useSessionState('lists/plant', '');
+  // Machine/line selector — shared session key with the Dashboard.
+  const [line, setLine] = useSessionState<LineScope>('app/line', 'all');
   const [plants, setPlants] = useState<string[]>([]);
   const [type, setType] = useSessionState<ListType>('lists/type', 'all');
   const [page, setPage] = useSessionState('lists/page', 1);
@@ -279,6 +283,7 @@ export default function Lists() {
         from,
         to,
         plant: plant || undefined,
+        line: line === 'all' ? undefined : line,
         page,
         size,
         sort: 'Date_Time',
@@ -297,7 +302,7 @@ export default function Lists() {
     } finally {
       setLoading(false);
     }
-  }, [type, from, to, plant, page, search, pcode, stateFilter, circlipFilter, ringFilter, timeFrom, timeTo]);
+  }, [type, from, to, plant, line, page, search, pcode, stateFilter, circlipFilter, ringFilter, timeFrom, timeTo]);
 
   useEffect(() => {
     fetchPlants().then(setPlants).catch(() => {});
@@ -314,13 +319,14 @@ export default function Lists() {
       from,
       to,
       plant: plant || undefined,
+      line: line === 'all' ? undefined : line,
       time_from: timeFrom || undefined,
       time_to: timeTo || undefined,
     })
       .then((s) => { if (!cancelled) setSummary(s); })
       .catch(() => { if (!cancelled) setSummary(null); });
     return () => { cancelled = true; };
-  }, [from, to, plant, timeFrom, timeTo]);
+  }, [from, to, plant, line, timeFrom, timeTo]);
 
   const handleDateChange = (newFrom: string, newTo: string, newPlant: string) => {
     setFrom(newFrom);
@@ -419,6 +425,7 @@ export default function Lists() {
     from,
     to,
     plant: plant || undefined,
+    line: line === 'all' ? undefined : line,
     sort: 'Date_Time',
     order: 'desc',
     pcode: pcode || undefined,
@@ -457,6 +464,12 @@ export default function Lists() {
             </select>
           </div>
           <DateRangePicker from={from} to={to} plant={plant} plants={plants} onChange={handleDateChange} todayOverride={getProductionDate()} />
+        </div>
+        {/* Machine / line selector — filters the whole page to Machine 1,
+            Machine 2, or both combined. Shared with the Dashboard. */}
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-gray-500 font-medium">Machine:</label>
+          <MachineSelector value={line} onChange={(v) => { setLine(v); setPage(1); }} />
         </div>
         {/* Shift + hour window. Clicking a shift fills the From/To inputs
             with that shift's bounds; the operator can then narrow further

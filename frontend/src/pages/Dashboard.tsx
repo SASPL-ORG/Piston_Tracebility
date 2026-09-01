@@ -4,6 +4,8 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsive
 import clsx from 'clsx';
 import KpiCard from '../components/KpiCard';
 import DateRangePicker from '../components/DateRangePicker';
+import MachineSelector from '../components/MachineSelector';
+import { useSessionState } from '../lib/useSessionState';
 import {
   fetchDashboard,
   fetchHealth,
@@ -13,6 +15,7 @@ import {
   PART_STATE_LABEL,
   ProductionGranularity,
   ShiftScope,
+  LineScope,
 } from '../lib/api';
 import { getProductionDate, SHIFTS } from '../lib/shifts';
 
@@ -55,6 +58,8 @@ export default function Dashboard() {
   // 'all' shows the full date range unscoped; A/B/C narrows every widget on
   // the page to that shift's window within the date range.
   const [shift, setShift] = useState<ShiftScope>('all');
+  // Machine/line selector — shared session key so it carries across to Lists.
+  const [line, setLine] = useSessionState<LineScope>('app/line', 'all');
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -74,26 +79,26 @@ export default function Dashboard() {
   // we don't want the visible state to flicker every 30 s.
   const loadDataSilent = useCallback(async () => {
     try {
-      const result = await fetchDashboard(from, to, { shift });
+      const result = await fetchDashboard(from, to, { shift, line });
       setData(result);
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load dashboard');
     }
-  }, [from, to, shift]);
+  }, [from, to, shift, line]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const result = await fetchDashboard(from, to, { shift });
+      const result = await fetchDashboard(from, to, { shift, line });
       setData(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load dashboard');
     } finally {
       setLoading(false);
     }
-  }, [from, to, shift]);
+  }, [from, to, shift, line]);
 
   useEffect(() => {
     loadData();
@@ -184,6 +189,10 @@ export default function Dashboard() {
           onChange={(f, t) => handleDateChange(f, t)}
           todayOverride={today}
         />
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-gray-500 font-medium">Machine:</label>
+          <MachineSelector value={line} onChange={setLine} />
+        </div>
         <div className="flex items-center gap-2">
           <label className="text-xs text-gray-500 font-medium">Shift:</label>
           <div className="inline-flex rounded-md border border-gray-200 overflow-hidden">
