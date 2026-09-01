@@ -94,6 +94,8 @@ export interface FailuresQuery {
   to?: string;
   shift?: 'A' | 'B' | 'C' | 'all';
   plant?: string;
+  time_from?: string; // 'HH:mm' — the Lists page From-hour
+  time_to?: string;   // 'HH:mm' — the Lists page To-hour
 }
 
 export function fetchFailures(params: FailuresQuery): Promise<ListFailuresResponse> {

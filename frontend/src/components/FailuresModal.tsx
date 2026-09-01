@@ -19,6 +19,10 @@ export interface FailuresModalProps {
   to: string;
   shift: 'A' | 'B' | 'C' | 'all';
   plant: string; // '' = all plants
+  // From-hour / To-hour window carried in from the Lists page ('HH:mm',
+  // '' = none) so the modal counts the SAME hour slice as the page.
+  timeFrom?: string;
+  timeTo?: string;
   // Pre-computed strings for the subtitle: "30 Days · Shift B · All
   // Plants" — the modal doesn't try to reverse-engineer the date label
   // from the from/to range, the calling page does that.
@@ -44,6 +48,8 @@ export default function FailuresModal({
   to,
   shift,
   plant,
+  timeFrom,
+  timeTo,
   rangeLabel,
   onClose,
 }: FailuresModalProps) {
@@ -62,6 +68,8 @@ export default function FailuresModal({
         to,
         shift,
         plant: plant || undefined,
+        time_from: timeFrom || undefined,
+        time_to: timeTo || undefined,
       });
       setData(r);
     } catch (e) {
@@ -69,7 +77,7 @@ export default function FailuresModal({
     } finally {
       setLoading(false);
     }
-  }, [type, from, to, shift, plant]);
+  }, [type, from, to, shift, plant, timeFrom, timeTo]);
 
   useEffect(() => {
     load();

@@ -875,6 +875,8 @@ export default function Lists() {
           to={to}
           shift={shift}
           plant={plant}
+          timeFrom={timeFrom}
+          timeTo={timeTo}
           rangeLabel={dateRangeLabel(from, to)}
           onClose={() => setFailuresOpen(null)}
         />

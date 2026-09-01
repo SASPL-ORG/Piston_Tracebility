@@ -134,8 +134,14 @@ END`;
 
 function buildTypeWhere(type: string | undefined): string {
   switch (type) {
+    // COMPLETED is a passed part that the line finished + unloaded but the
+    // operator hasn't Zebra-packed into a bin yet. The Dashboard/Summary
+    // count it as passed (they use the line-side state where it's PACKED),
+    // so the list MUST include it too — otherwise a reinspected/passed part
+    // that isn't packed yet silently drops out and the list under-counts
+    // vs the summary (the "Re-Inspection shows 3 but list is empty" bug).
     case 'passed':
-      return "state IN ('PACKED','RING_OK')";
+      return "state IN ('PACKED','COMPLETED','RING_OK')";
     case 'packed':
       return "state = 'PACKED'";
     case 'circlip_scrap':
@@ -151,7 +157,7 @@ function buildTypeWhere(type: string | undefined): string {
     // re-inspection but still failed end up under ring_rejected /
     // circlip_scrap, not here.
     case 'reinspected':
-      return "(state IN ('PACKED','RING_OK') AND (total_attempts > 1 OR max_circlip_count > 1 OR (has_circlip_fail = 1 AND has_circlip_pass = 1)))";
+      return "(state IN ('PACKED','COMPLETED','RING_OK') AND (total_attempts > 1 OR max_circlip_count > 1 OR (has_circlip_fail = 1 AND has_circlip_pass = 1)))";
     default:
       return '1 = 1';
   }
@@ -567,6 +573,8 @@ export default async function listRoutes(app: FastifyInstance) {
       to?: string;
       shift?: string;
       plant?: string;
+      time_from?: string;
+      time_to?: string;
     };
   }>('/lists/failures', async (req) => {
     const type = req.query.type === 'ring' ? 'ring' : 'circlip';
@@ -577,12 +585,20 @@ export default async function listRoutes(app: FastifyInstance) {
     // Translate shift to the same minute-of-day window the Lists Shift
     // buttons set on the frontend. shift='all' = no time-of-day filter.
     const shiftWindow = shift === 'all' ? null : SHIFT_WINDOWS[shift];
-    const timeWhereOnL = shiftWindow
+    const shiftWhereOnL = shiftWindow
       ? `(DATEPART(HOUR, l.Date_Time) * 60 + DATEPART(MINUTE, l.Date_Time)) BETWEEN ${shiftWindow.fromMin} AND ${shiftWindow.toMin}`
       : '1 = 1';
-    const timeWhereRaw = shiftWindow
+    const shiftWhereRaw = shiftWindow
       ? `(DATEPART(HOUR, Date_Time) * 60 + DATEPART(MINUTE, Date_Time)) BETWEEN ${shiftWindow.fromMin} AND ${shiftWindow.toMin}`
       : '1 = 1';
+
+    // The From-hour / To-hour window the operator set on the Lists page.
+    // Previously this drill-down ignored it, so the modal reported the
+    // whole day's failures even when the page behind it was filtered to an
+    // hour window — hence "summary says 7, modal says 11". Apply the SAME
+    // wrapping-window helper the Lists table uses so the two agree.
+    const timeWhereOnL = `(${shiftWhereOnL}) AND ${buildTimeOfDayWhere(req.query.time_from, req.query.time_to, 'l.Date_Time')}`;
+    const timeWhereRaw = `(${shiftWhereRaw}) AND ${buildTimeOfDayWhere(req.query.time_from, req.query.time_to, 'Date_Time')}`;
 
     const ROW_CAP = 1000;
     const pool = await getPool();
