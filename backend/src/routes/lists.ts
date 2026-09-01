@@ -91,30 +91,58 @@ function parseHourMin(s: string | undefined): number | null {
   return h * 60 + mi;
 }
 
-// Outer-WHERE fragment for the hour-of-day window. The column arg lets
-// callers point this at either the projected `Date_Time` (Lists outer
-// WHERE) or the qualified `l.Date_Time` (Summary, which queries the
-// CTE directly without classifiedSelect wrapping).
-function buildTimeOfDayWhere(
-  timeFrom: string | undefined,
-  timeTo: string | undefined,
-  col: string = 'Date_Time',
-): string {
-  const fromMin = parseHourMin(timeFrom);
-  const toMin = parseHourMin(timeTo);
-  if (fromMin === null && toMin === null) return '1 = 1';
-  const expr = `(DATEPART(HOUR, ${col}) * 60 + DATEPART(MINUTE, ${col}))`;
-  if (fromMin !== null && toMin !== null) {
-    // When "from" is later in the day than "to" (e.g. 21:40 -> 09:40, or Shift C
-    // 23:30 -> 07:00) the window WRAPS past midnight, so it's (time >= from OR
-    // time <= to). A normal same-day window (from <= to) is (from AND to).
-    // Without this an overnight window is `>= from AND <= to`, which nothing can
-    // satisfy, so the list comes back empty.
-    return fromMin > toMin
-      ? `(${expr} >= ${fromMin} OR ${expr} <= ${toMin})`
-      : `(${expr} >= ${fromMin} AND ${expr} <= ${toMin})`;
+// Minute-of-day (from parseHourMin's validated integer) back to 'HH:MM'.
+// Injection-safe: numeric-derived, never the raw query string.
+function hhmm(min: number): string {
+  const h = String(Math.floor(min / 60)).padStart(2, '0');
+  const m = String(min % 60).padStart(2, '0');
+  return `${h}:${m}`;
+}
+
+// Bind the SAM_Log date/time WHERE for the Lists page. Two modes:
+//
+//  • No From-hour / To-hour → the production-day window
+//    [From 07:00, (To+1) 07:00) — Shift A start to next Shift A start,
+//    identical to the Dashboard so the two agree.
+//
+//  • From-hour and/or To-hour set → ONE CONTINUOUS ABSOLUTE span
+//    [From date + From hour, To date + To hour]. This is what the operator
+//    means by "9:39 PM → 11:40 AM" with From=Aug-31 To=Sep-01: a single
+//    span from Aug-31 21:39 to Sep-01 11:40. The old behaviour applied the
+//    hours as a REPEATING time-of-day mask, so Aug-31 *morning* 08:35 also
+//    matched (08:35 < 11:40) even though it's before the span start — the
+//    "filter shows things outside the range" bug. If the end lands at or
+//    before the start on a single date (an overnight span typed with
+//    From==To), the end rolls to the next day so the window still holds.
+function bindListRange(
+  request: import('mssql').Request,
+  q: { from?: string; to?: string; time_from?: string; time_to?: string; plant?: string },
+): string[] {
+  const tf = parseHourMin(q.time_from);
+  const tt = parseHourMin(q.time_to);
+
+  if (tf === null && tt === null) {
+    // No hour window → reuse the Dashboard's production-day binding.
+    return bindProductionDayFilterInputs(request, q);
   }
-  return fromMin !== null ? `(${expr} >= ${fromMin})` : `(${expr} <= ${toMin})`;
+
+  const conds: string[] = [];
+  const startClock = tf !== null ? hhmm(tf) : '00:00';
+  const endClock = tt !== null ? hhmm(tt) : '23:59';
+  if (q.from) {
+    conds.push('Date_Time >= @range_start');
+    request.input('range_start', `${q.from} ${startClock}:00`);
+  }
+  if (q.to) {
+    const wraps = !!q.from && q.from === q.to && tf !== null && tt !== null && tt <= tf;
+    conds.push(`Date_Time <= DATEADD(DAY, ${wraps ? 1 : 0}, @range_end)`);
+    request.input('range_end', `${q.to} ${endClock}:59`);
+  }
+  if (q.plant) {
+    conds.push('Plant_Id = @plant');
+    request.input('plant', q.plant);
+  }
+  return conds;
 }
 
 // Same bucket priority as the Dashboard's KPI partitioning — every DMC
@@ -190,7 +218,7 @@ function buildBaseCte(query: ListQuery, request: import('mssql').Request): strin
   // Same production-day window as the Dashboard so the two pages report
   // identical counts for the same date filter. A "date" in the URL maps
   // to [date 07:00, (date+1) 07:00) — Shift A start to next Shift A start.
-  const conds = bindProductionDayFilterInputs(request, query);
+  const conds = bindListRange(request, query);
   if (query.search) {
     conds.push('DMC LIKE @search');
     request.input('search', `%${query.search}%`);
@@ -268,7 +296,6 @@ export default async function listRoutes(app: FastifyInstance) {
     const stateWhere = buildInClause('state', req.query.state, STATE_VALUES);
     const circlipWhere = buildInClause('Circlip_Result', req.query.circlip, RESULT_VALUES);
     const ringWhere = buildInClause('Ring_Result', req.query.ring, RESULT_VALUES);
-    const timeWhere = buildTimeOfDayWhere(req.query.time_from, req.query.time_to);
 
     const pool = await getPool();
 
@@ -283,7 +310,6 @@ export default async function listRoutes(app: FastifyInstance) {
         AND ${stateWhere}
         AND ${circlipWhere}
         AND ${ringWhere}
-        AND ${timeWhere}
     `);
     const total = countResult.recordset[0].total;
 
@@ -301,7 +327,6 @@ export default async function listRoutes(app: FastifyInstance) {
         AND ${stateWhere}
         AND ${circlipWhere}
         AND ${ringWhere}
-        AND ${timeWhere}
       ORDER BY ${sortKey} ${order}
       OFFSET @offset ROWS FETCH NEXT @size ROWS ONLY
     `);
@@ -386,7 +411,6 @@ export default async function listRoutes(app: FastifyInstance) {
     const stateWhere = buildInClause('state', req.query.state, STATE_VALUES);
     const circlipWhere = buildInClause('Circlip_Result', req.query.circlip, RESULT_VALUES);
     const ringWhere = buildInClause('Ring_Result', req.query.ring, RESULT_VALUES);
-    const timeWhere = buildTimeOfDayWhere(req.query.time_from, req.query.time_to);
 
     const pool = await getPool();
     const request = pool.request();
@@ -400,7 +424,6 @@ export default async function listRoutes(app: FastifyInstance) {
         AND ${stateWhere}
         AND ${circlipWhere}
         AND ${ringWhere}
-        AND ${timeWhere}
       ORDER BY ${sortKey} ${order}
     `);
 
@@ -475,9 +498,8 @@ export default async function listRoutes(app: FastifyInstance) {
     return getOrComputeSWR(req.url, 60_000, async () => {
     const pool = await getPool();
     const request = pool.request();
-    const conds = bindProductionDayFilterInputs(request, req.query);
+    const conds = bindListRange(request, req.query);
     const cte = buildLatestPerDmcCte(conds);
-    const timeWhere = buildTimeOfDayWhere(req.query.time_from, req.query.time_to, 'l.Date_Time');
 
     // Include EVERY DMC that the Dashboard counts — DMCs without the
     // P234102 prefix (malformed scans, test pieces, etc.) get bucketed
@@ -496,7 +518,6 @@ export default async function listRoutes(app: FastifyInstance) {
         COUNT(DISTINCT l.DMC) AS count
       FROM latest l
       INNER JOIN per_dmc p ON p.DMC = l.DMC
-      WHERE ${timeWhere}
       GROUP BY
         ${SUMMARY_BUCKET_CASE},
         CASE
@@ -584,28 +605,24 @@ export default async function listRoutes(app: FastifyInstance) {
 
     // Translate shift to the same minute-of-day window the Lists Shift
     // buttons set on the frontend. shift='all' = no time-of-day filter.
+    // The operator's From-hour/To-hour window is NOT applied here — it's
+    // already folded into the absolute date range by bindListRange below,
+    // so the modal counts exactly the span the page behind it shows.
     const shiftWindow = shift === 'all' ? null : SHIFT_WINDOWS[shift];
-    const shiftWhereOnL = shiftWindow
+    const timeWhereOnL = shiftWindow
       ? `(DATEPART(HOUR, l.Date_Time) * 60 + DATEPART(MINUTE, l.Date_Time)) BETWEEN ${shiftWindow.fromMin} AND ${shiftWindow.toMin}`
       : '1 = 1';
-    const shiftWhereRaw = shiftWindow
+    const timeWhereRaw = shiftWindow
       ? `(DATEPART(HOUR, Date_Time) * 60 + DATEPART(MINUTE, Date_Time)) BETWEEN ${shiftWindow.fromMin} AND ${shiftWindow.toMin}`
       : '1 = 1';
-
-    // The From-hour / To-hour window the operator set on the Lists page.
-    // Previously this drill-down ignored it, so the modal reported the
-    // whole day's failures even when the page behind it was filtered to an
-    // hour window — hence "summary says 7, modal says 11". Apply the SAME
-    // wrapping-window helper the Lists table uses so the two agree.
-    const timeWhereOnL = `(${shiftWhereOnL}) AND ${buildTimeOfDayWhere(req.query.time_from, req.query.time_to, 'l.Date_Time')}`;
-    const timeWhereRaw = `(${shiftWhereRaw}) AND ${buildTimeOfDayWhere(req.query.time_from, req.query.time_to, 'Date_Time')}`;
 
     const ROW_CAP = 1000;
     const pool = await getPool();
     const request = pool.request();
-    // Date + plant bound via the same helper the Lists endpoint uses —
-    // production-day window, plant filter, identical semantics.
-    const conds = bindProductionDayFilterInputs(request, req.query);
+    // Date + hour + plant bound via the same helper the Lists table uses —
+    // continuous [From+hour, To+hour] span (or production-day window when no
+    // hours are set), identical semantics to the page behind the modal.
+    const conds = bindListRange(request, req.query);
 
     let rows: Array<{ Date_Time: string | null; Plant_Id: string | null; DMC: string | null; rejection_reason: string | null }>;
 
