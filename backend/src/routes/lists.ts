@@ -104,10 +104,17 @@ function buildTimeOfDayWhere(
   const toMin = parseHourMin(timeTo);
   if (fromMin === null && toMin === null) return '1 = 1';
   const expr = `(DATEPART(HOUR, ${col}) * 60 + DATEPART(MINUTE, ${col}))`;
-  const parts: string[] = [];
-  if (fromMin !== null) parts.push(`${expr} >= ${fromMin}`);
-  if (toMin !== null) parts.push(`${expr} <= ${toMin}`);
-  return `(${parts.join(' AND ')})`;
+  if (fromMin !== null && toMin !== null) {
+    // When "from" is later in the day than "to" (e.g. 21:40 -> 09:40, or Shift C
+    // 23:30 -> 07:00) the window WRAPS past midnight, so it's (time >= from OR
+    // time <= to). A normal same-day window (from <= to) is (from AND to).
+    // Without this an overnight window is `>= from AND <= to`, which nothing can
+    // satisfy, so the list comes back empty.
+    return fromMin > toMin
+      ? `(${expr} >= ${fromMin} OR ${expr} <= ${toMin})`
+      : `(${expr} >= ${fromMin} AND ${expr} <= ${toMin})`;
+  }
+  return fromMin !== null ? `(${expr} >= ${fromMin})` : `(${expr} <= ${toMin})`;
 }
 
 // Same bucket priority as the Dashboard's KPI partitioning — every DMC
