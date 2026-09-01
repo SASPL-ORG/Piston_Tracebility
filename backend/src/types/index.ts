@@ -198,6 +198,17 @@ export interface AlarmListItem {
 export type EventTimelineStepType = 'checkpoint' | 'intermediate' | 'conditional';
 export type EventTimelineStepStatus = 'OK' | 'FAIL' | 'COMPLETED';
 
+// One of the 5 physical ring-assembly sub-stations (St10-14) shown under
+// the "Ring Assembly Station" timeline node. `status` is 'OK'/'FAIL' once
+// Node-RED has logged that station's Part-Complete for the DMC
+// (dbo.Station_Events); 'PENDING' until the piston has cleared it.
+export interface EventTimelineSubStation {
+  label: string;
+  timestamp?: string | null;
+  status?: 'OK' | 'FAIL' | 'PENDING';
+  reason?: string | null;
+}
+
 export interface EventTimelineStep {
   step: number;
   label: string;
@@ -207,8 +218,9 @@ export interface EventTimelineStep {
   reason?: string | null;
   // Event 13 only — total ring inspection attempts (latest row's Ring_Count).
   attempts?: number;
-  // Event 10 only — the 5 ring-assembly sub-stations listed under it.
-  substations?: string[];
+  // Event 10 only — the 5 ring-assembly sub-stations listed under it, each
+  // with its own live completion status.
+  substations?: EventTimelineSubStation[];
 }
 
 export interface PartTraceResponse {

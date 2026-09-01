@@ -235,6 +235,16 @@ export function fetchAlarms(params: AlarmListParams): Promise<PaginatedResponse<
 export type EventTimelineStepType = 'checkpoint' | 'intermediate' | 'conditional';
 export type EventTimelineStepStatus = 'OK' | 'FAIL' | 'COMPLETED';
 
+// One of the 5 ring-assembly sub-stations (St10-14) under "Ring Assembly
+// Station". status is 'OK'/'FAIL' once Node-RED logs that station's
+// Part-Complete for the DMC; 'PENDING' until the piston clears it.
+export interface EventTimelineSubStation {
+  label: string;
+  timestamp?: string | null;
+  status?: 'OK' | 'FAIL' | 'PENDING';
+  reason?: string | null;
+}
+
 export interface EventTimelineStep {
   step: number;
   label: string;
@@ -243,7 +253,7 @@ export interface EventTimelineStep {
   status?: EventTimelineStepStatus;
   reason?: string | null;
   attempts?: number;
-  substations?: string[];
+  substations?: EventTimelineSubStation[];
 }
 
 export interface PartResponse {

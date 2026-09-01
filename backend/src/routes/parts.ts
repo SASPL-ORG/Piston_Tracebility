@@ -9,6 +9,7 @@ import type {
   AlarmEvent,
   AlarmStatus,
   EventTimelineStep,
+  EventTimelineSubStation,
   PartTraceResponse,
   SamLogRecord,
 } from '../types/index.js';
@@ -40,12 +41,16 @@ interface StationEventRow {
   Reason: string | null;
 }
 
-const RING_ASSEMBLY_SUBSTATIONS = [
-  'Expander Ring',
-  'Bottom Rail Ring',
-  'Top Rail Ring',
-  'Second Ring',
-  'Top Ring',
+// The 5 physical ring-assembly sub-stations, in line order, each mapped to
+// its PLC/Node-RED station number (St10-14 in dbo.Station_Events). The
+// timeline lights each one green the moment Node-RED logs that station's
+// Part-Complete for the DMC.
+const RING_ASSEMBLY_STATIONS: { no: number; label: string }[] = [
+  { no: 10, label: 'Expander Ring' },
+  { no: 11, label: 'Bottom Rail Ring' },
+  { no: 12, label: 'Top Rail Ring' },
+  { no: 13, label: 'Second Ring' },
+  { no: 14, label: 'Top Ring' },
 ];
 
 // Build the 13-event journey from the part's SAM_Log rows. Visibility
@@ -141,13 +146,35 @@ function buildEventTimeline(
     timeline.push({ step: 7, label: 'Snap Ring Inspection', type: 'intermediate' });
   }
 
-  // Ring stations — always listed (descriptive). No early return when the ring
-  // hasn't happened yet, so Unloading / Packing still appear as pending.
+  // Ring Assembly Station — 5 physical sub-stations (St10-14). Each renders
+  // green with its completion time once Node-RED has logged that station's
+  // Part-Complete for this DMC (dbo.Station_Events); otherwise it stays a grey
+  // pending marker. The parent node goes green only once all 5 have completed
+  // (or red if any station reported a fail). No early return — Unloading /
+  // Packing still appear as pending for an in-progress part.
+  const ringSubs: EventTimelineSubStation[] = RING_ASSEMBLY_STATIONS.map((s) => {
+    const ev = stationEvents.get(s.no);
+    if (ev?.timestamp) {
+      const failed = ev.status === 'FAIL';
+      return {
+        label: s.label,
+        timestamp: ev.timestamp,
+        status: failed ? 'FAIL' : 'OK',
+        reason: failed ? ev.reason : null,
+      };
+    }
+    return { label: s.label, status: 'PENDING' };
+  });
+  const ringAnyFail = ringSubs.some((s) => s.status === 'FAIL');
+  const ringAllDone = ringSubs.every((s) => s.status === 'OK');
+  const ringAnyDone = ringSubs.some((s) => s.status !== 'PENDING');
+  const ringLastTs = ringSubs.filter((s) => s.timestamp).map((s) => s.timestamp!).slice(-1)[0] ?? null;
   timeline.push({
     step: 10,
     label: 'Ring Assembly Station',
-    type: 'intermediate',
-    substations: RING_ASSEMBLY_SUBSTATIONS,
+    type: ringAnyDone && (ringAllDone || ringAnyFail) ? 'checkpoint' : 'intermediate',
+    ...(ringAnyDone ? { timestamp: ringLastTs, status: ringAnyFail ? 'FAIL' : 'OK' } : {}),
+    substations: ringSubs,
   });
   timeline.push({ step: 12, label: 'DMC3 — Barcode Scan', type: 'intermediate' });
 

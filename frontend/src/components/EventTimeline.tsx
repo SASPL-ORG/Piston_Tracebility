@@ -86,12 +86,28 @@ function IntermediateBody({ step }: { step: EventTimelineStep }) {
       <p className="text-sm text-gray-500">{step.label}</p>
       {step.substations && step.substations.length > 0 && (
         <ul className="mt-1.5 space-y-1 pl-3 border-l border-gray-200 ml-1">
-          {step.substations.map((sub) => (
-            <li key={sub} className="flex items-center gap-2 text-xs text-gray-500">
-              <Circle size={6} className="text-gray-300 fill-gray-300" />
-              <span>{sub}</span>
-            </li>
-          ))}
+          {step.substations.map((sub) => {
+            const done = sub.status === 'OK';
+            const failed = sub.status === 'FAIL';
+            return (
+              <li key={sub.label} className="flex items-center gap-2 text-xs">
+                {done ? (
+                  <CheckCircle size={11} className="text-emerald-500 shrink-0" />
+                ) : failed ? (
+                  <XCircle size={11} className="text-red-500 shrink-0" />
+                ) : (
+                  <Circle size={6} className="text-gray-300 fill-gray-300 shrink-0 mx-[2.5px]" />
+                )}
+                <span className={clsx(done ? 'text-gray-700' : failed ? 'text-red-700 font-medium' : 'text-gray-500')}>
+                  {sub.label}
+                </span>
+                {sub.timestamp && (
+                  <span className="text-gray-400 tabular-nums">· {formatDateTime(sub.timestamp)}</span>
+                )}
+                {failed && sub.reason && <span className="text-red-500">· {sub.reason}</span>}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>
