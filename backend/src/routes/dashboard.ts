@@ -22,6 +22,8 @@ interface DashboardQuery {
   from?: string;
   to?: string;
   plant?: string;
+  // Machine/line selector: '1' | '2' filters SAM_Log.Line_ID; else all lines.
+  line?: string;
   shift?: string;
 }
 
@@ -240,5 +242,23 @@ export default async function dashboardRoutes(app: FastifyInstance) {
       SELECT DISTINCT Plant_Id FROM dbo.SAM_Log WHERE Plant_Id IS NOT NULL ORDER BY Plant_Id
     `);
     return result.recordset.map((r: { Plant_Id: string }) => r.Plant_Id);
+  });
+
+  // Distinct machine lines present in the data — powers the Machine 1 / 2 / Both
+  // selector. Returns the Line_ID plus the most-recent activity so the UI can
+  // show only lines that actually have data (a fresh install with one machine
+  // shows one entry). Cheap enough to compute live.
+  app.get('/lines', async () => {
+    const pool = await getPool();
+    const result = await pool.request().query(`
+      SELECT Line_ID, COUNT(*) AS parts, MAX(Date_Time) AS last_seen
+      FROM dbo.SAM_Log WHERE Line_ID IS NOT NULL
+      GROUP BY Line_ID ORDER BY Line_ID
+    `);
+    return result.recordset.map((r: { Line_ID: number; parts: number; last_seen: string | null }) => ({
+      line_id: r.Line_ID,
+      parts: r.parts,
+      last_seen: r.last_seen,
+    }));
   });
 }

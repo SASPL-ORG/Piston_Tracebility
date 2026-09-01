@@ -207,6 +207,20 @@ export interface DmcFilter {
   from?: string;
   to?: string;
   plant?: string;
+  // Machine/line selector. '1' or '2' filters SAM_Log.Line_ID; anything else
+  // (undefined / 'all' / 'both') means all lines. Multi-line dashboards send
+  // this so a single install can show Machine 1, Machine 2, or both combined.
+  line?: string;
+}
+
+// Appends a `Line_ID = @line` condition when a specific machine line is
+// requested. Validated to a small integer so the inlined bind is injection-safe
+// and a stray 'all'/'both' string simply means "no line filter".
+function bindLine(request: sql.Request, filters: DmcFilter, conds: string[]): void {
+  if (filters.line && /^\d{1,3}$/.test(filters.line)) {
+    conds.push('Line_ID = @line');
+    request.input('line', parseInt(filters.line, 10));
+  }
 }
 
 // Binds @from/@to/@plant on the request and returns the SAM_Log WHERE conditions.
@@ -224,6 +238,7 @@ export function bindFilterInputs(request: sql.Request, filters: DmcFilter): stri
     conds.push('Plant_Id = @plant');
     request.input('plant', filters.plant);
   }
+  bindLine(request, filters, conds);
   return conds;
 }
 
@@ -251,6 +266,7 @@ export function bindProductionDayFilterInputs(
     conds.push('Plant_Id = @plant');
     request.input('plant', filters.plant);
   }
+  bindLine(request, filters, conds);
   return conds;
 }
 

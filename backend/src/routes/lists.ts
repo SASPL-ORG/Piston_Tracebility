@@ -56,6 +56,8 @@ interface ListQuery {
   from?: string;
   to?: string;
   plant?: string;
+  // Machine/line selector: '1' | '2' filters SAM_Log.Line_ID; else all lines.
+  line?: string;
   page?: string;
   size?: string;
   sort?: string;
@@ -116,13 +118,13 @@ function hhmm(min: number): string {
 //    From==To), the end rolls to the next day so the window still holds.
 function bindListRange(
   request: import('mssql').Request,
-  q: { from?: string; to?: string; time_from?: string; time_to?: string; plant?: string },
+  q: { from?: string; to?: string; time_from?: string; time_to?: string; plant?: string; line?: string },
 ): string[] {
   const tf = parseHourMin(q.time_from);
   const tt = parseHourMin(q.time_to);
 
   if (tf === null && tt === null) {
-    // No hour window → reuse the Dashboard's production-day binding.
+    // No hour window → reuse the Dashboard's production-day binding (line incl).
     return bindProductionDayFilterInputs(request, q);
   }
 
@@ -141,6 +143,10 @@ function bindListRange(
   if (q.plant) {
     conds.push('Plant_Id = @plant');
     request.input('plant', q.plant);
+  }
+  if (q.line && /^\d{1,3}$/.test(q.line)) {
+    conds.push('Line_ID = @line');
+    request.input('line', parseInt(q.line, 10));
   }
   return conds;
 }
@@ -493,7 +499,7 @@ export default async function listRoutes(app: FastifyInstance) {
   // always shows the full breakdown regardless of how the operator has
   // narrowed the table below.
   app.get<{
-    Querystring: Pick<ListQuery, 'from' | 'to' | 'plant' | 'time_from' | 'time_to'>;
+    Querystring: Pick<ListQuery, 'from' | 'to' | 'plant' | 'line' | 'time_from' | 'time_to'>;
   }>('/summary', async (req) => {
     return getOrComputeSWR(req.url, 60_000, async () => {
     const pool = await getPool();
