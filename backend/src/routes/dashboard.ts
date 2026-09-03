@@ -122,7 +122,10 @@ export default async function dashboardRoutes(app: FastifyInstance) {
     const dmcQuery = dmcRequest.query(`
       ${dmcCte}
       SELECT
-        COUNT(*) AS total,
+        -- 'Total Parts' counts actually-produced pistons and EXCLUDES ABORTED
+        -- (parts picked/faulted at loading, never produced). Aborted still has
+        -- its own KPI tile; it just doesn't inflate the total or the pass rate.
+        SUM(CASE WHEN ${STATE_CASE_SQL} <> 'ABORTED' THEN 1 ELSE 0 END) AS total,
         SUM(CASE WHEN ${STATE_CASE_SQL} IN ('PACKED','RING_OK') THEN 1 ELSE 0 END) AS passed,
         SUM(CASE WHEN ${BUCKET_CASE} = 'circlip_fail' THEN 1 ELSE 0 END) AS circlip_fail,
         SUM(CASE WHEN ${BUCKET_CASE} = 'ring_fail' THEN 1 ELSE 0 END) AS ring_fail,

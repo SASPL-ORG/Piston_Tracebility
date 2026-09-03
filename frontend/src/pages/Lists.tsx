@@ -398,7 +398,12 @@ export default function Lists() {
   // re-inspection rows are SUBSETS of passed, not exclusive buckets.
   // Column totals and grand total skip them to avoid double-counting;
   // the rows still render their subset counts in the body.
-  const REINSPECTION_BUCKETS = new Set(['circlip_reinspected', 'ring_reinspected']);
+  // Buckets whose rows still render but are NOT summed into the column/grand
+  // totals:
+  //  - reinspection buckets are SUBSETS of 'passed' (would double-count)
+  //  - 'aborted' parts were picked/faulted at loading and never actually
+  //    produced, so they must not inflate "Total" (per the operator).
+  const EXCLUDED_FROM_TOTAL = new Set(['circlip_reinspected', 'ring_reinspected', 'aborted']);
   const summaryPivot = new Map<string, Map<string, number>>();
   const rowTotals = new Map<string, number>();
   const colTotals = new Map<string, number>();
@@ -407,7 +412,7 @@ export default function Lists() {
     if (!summaryPivot.has(e.bucket)) summaryPivot.set(e.bucket, new Map());
     summaryPivot.get(e.bucket)!.set(e.part_code, e.count);
     rowTotals.set(e.bucket, (rowTotals.get(e.bucket) ?? 0) + e.count);
-    if (!REINSPECTION_BUCKETS.has(e.bucket)) {
+    if (!EXCLUDED_FROM_TOTAL.has(e.bucket)) {
       colTotals.set(e.part_code, (colTotals.get(e.part_code) ?? 0) + e.count);
       grandTotal += e.count;
     }
