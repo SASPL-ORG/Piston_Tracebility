@@ -11,7 +11,7 @@ const STATE_LABEL: Record<PartState, string> = {
   RING_NG: 'Ring Rejected',
   CIRCLIP_SCRAP: 'Snap Ring Scrap',
   IN_PROGRESS: 'In Progress',
-  ABORTED: 'Aborted',
+  ABORTED: 'DMC OK',
 };
 
 const COLOR = {

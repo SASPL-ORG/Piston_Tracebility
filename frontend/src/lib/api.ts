@@ -736,7 +736,7 @@ export const PART_STATE_LABEL: Record<PartState, string> = {
   RING_NG: 'Ring Rejected',
   CIRCLIP_SCRAP: 'Snap Ring Scrap',
   IN_PROGRESS: 'In Progress',
-  ABORTED: 'Aborted',
+  ABORTED: 'DMC OK',
 };
 
 // Display-time rename of the customer's plant. The DB column SAM_Log.Plant_Id

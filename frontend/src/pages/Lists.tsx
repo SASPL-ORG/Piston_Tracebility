@@ -54,7 +54,7 @@ const TYPE_OPTIONS: { value: ListType; label: string }[] = [
   // selectable from the dropdown.
   { value: 'reinspected', label: 'Re-Inspection' },
   { value: 'in_progress', label: 'In Progress' },
-  { value: 'aborted', label: 'Aborted' },
+  { value: 'aborted', label: 'DMC OK' },
   { value: 'packed', label: 'Completed' },
 ];
 
@@ -183,7 +183,7 @@ const SUMMARY_ROWS: { bucket: string; label: string; failureType?: FailureType }
   { bucket: 'circlip_fail',          label: 'Snap Ring Fail', failureType: 'circlip' },
   { bucket: 'ring_fail',             label: 'Ring Fail',      failureType: 'ring' },
   { bucket: 'in_progress',           label: 'In Progress' },
-  { bucket: 'aborted',               label: 'Aborted' },
+  { bucket: 'aborted',               label: 'DMC OK' },
   { bucket: 'circlip_reinspected',   label: 'Snap Ring Re-Inspection' },
   { bucket: 'ring_reinspected',      label: 'Ring Re-Inspection' },
 ];
