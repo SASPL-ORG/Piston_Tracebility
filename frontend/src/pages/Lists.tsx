@@ -275,8 +275,10 @@ export default function Lists() {
     return () => clearInterval(id);
   }, []);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  // `silent` skips the page-level spinner so the 30s background refresh
+  // doesn't flicker the table — same pattern the Dashboard uses to stay live.
+  const loadData = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const result = await fetchList({
         type,
@@ -300,9 +302,27 @@ export default function Lists() {
     } catch {
       setData(null);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [type, from, to, plant, line, page, search, pcode, stateFilter, circlipFilter, ringFilter, timeFrom, timeTo]);
+
+  // Production Summary fetch, extracted so both the filter effect and the
+  // periodic background refresh can reuse it.
+  const loadSummary = useCallback(async () => {
+    try {
+      const s = await fetchListSummary({
+        from,
+        to,
+        plant: plant || undefined,
+        line: line === 'all' ? undefined : line,
+        time_from: timeFrom || undefined,
+        time_to: timeTo || undefined,
+      });
+      setSummary(s);
+    } catch {
+      setSummary(null);
+    }
+  }, [from, to, plant, line, timeFrom, timeTo]);
 
   useEffect(() => {
     fetchPlants().then(setPlants).catch(() => {});
@@ -314,19 +334,22 @@ export default function Lists() {
   // date range + hour window define the slice; type/state/column
   // filters narrow the table but leave the summary untouched.
   useEffect(() => {
-    let cancelled = false;
-    fetchListSummary({
-      from,
-      to,
-      plant: plant || undefined,
-      line: line === 'all' ? undefined : line,
-      time_from: timeFrom || undefined,
-      time_to: timeTo || undefined,
-    })
-      .then((s) => { if (!cancelled) setSummary(s); })
-      .catch(() => { if (!cancelled) setSummary(null); });
-    return () => { cancelled = true; };
-  }, [from, to, plant, line, timeFrom, timeTo]);
+    loadSummary();
+  }, [loadSummary]);
+
+  // Live background refresh — re-fetch the table + summary every 30s WITHOUT
+  // the loading spinner, so parts that finish (In Progress / Aborted at
+  // loading → Completed) update on their own instead of the table staying
+  // frozen at the snapshot from when the page was opened. Mirrors the
+  // Dashboard, which already refreshes on this cadence; Lists was the only
+  // page left static, which is why it disagreed with Part-Trace on live parts.
+  useEffect(() => {
+    const id = setInterval(() => {
+      loadData(true);
+      loadSummary();
+    }, 30_000);
+    return () => clearInterval(id);
+  }, [loadData, loadSummary]);
 
   const handleDateChange = (newFrom: string, newTo: string, newPlant: string) => {
     setFrom(newFrom);
