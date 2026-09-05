@@ -459,6 +459,7 @@ export interface VerifyResponse {
   processedAt: string | null;
   shift: 'A' | 'B' | 'C' | null;
   productionDate: string | null;
+  machine: number | null;   // which production line (1/2) made the part; null if unknown
 }
 
 export async function verifyScan(scan: string): Promise<VerifyResponse> {

@@ -19,6 +19,10 @@ export interface SamLogRecord {
   Ring_Count: number | null;
   Unloading_Time: string | null;
   Result: string | null;
+  // Machine / production line (1 or 2). Present on multi-line installs;
+  // NULL on single-line data. `SELECT *` queries surface it for line-aware
+  // views (dashboard/lists filter, packing "which machine made this part").
+  Line_ID?: number | null;
 }
 
 // One row per DMC: the latest row plus per-DMC aggregates and classified

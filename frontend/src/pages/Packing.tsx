@@ -41,6 +41,7 @@ interface PartInfo {
   processedAt: string | null;
   shift: 'A' | 'B' | 'C' | null;
   productionDate: string | null;
+  machine: number | null;
 }
 
 type Outcome =
@@ -230,6 +231,7 @@ export default function Packing() {
           processedAt: v.processedAt,
           shift: v.shift,
           productionDate: v.productionDate,
+          machine: v.machine,
         };
         if (v.result === 'LOOKUP_ERROR') {
           setOutcome({ kind: 'cant_verify', msg: v.message });
@@ -360,6 +362,7 @@ export default function Packing() {
       ? outcome.part
       : undefined;
 
+  const cornerMachineLabel = part?.machine != null ? `Machine ${part.machine}` : null;
   const cornerDateLabel = formatPartDate(part?.productionDate ?? part?.processedAt ?? null);
   const cornerShiftLabel = part?.shift ? `Shift ${part.shift}` : null;
 
@@ -411,9 +414,14 @@ export default function Packing() {
         className={clsx('relative flex-1 flex flex-col items-center justify-center text-center px-6 py-10 transition-colors', band.bg, band.fg)}
         onClick={focusInput}
       >
-        {/* Date + shift chip — top-right corner, only when we have a part */}
-        {(cornerDateLabel || cornerShiftLabel) && (
+        {/* Machine + date + shift chip — top-right corner, only when we have a part */}
+        {(cornerMachineLabel || cornerDateLabel || cornerShiftLabel) && (
           <div className="absolute top-4 right-4 sm:top-5 sm:right-5 text-right leading-tight">
+            {cornerMachineLabel && (
+              <div className="inline-block px-3 py-1 mb-1.5 rounded-lg bg-white/25 text-xl sm:text-2xl font-extrabold uppercase tracking-wide">
+                {cornerMachineLabel}
+              </div>
+            )}
             {cornerDateLabel && (
               <div className="text-base sm:text-lg font-semibold opacity-90 tabular-nums">
                 {cornerDateLabel}

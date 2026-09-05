@@ -102,6 +102,7 @@ export interface PartInfoForOperator {
   processedAt: string | null;
   shift: ShiftId | null;
   productionDate: string | null;
+  machine: number | null;   // SAM_Log.Line_ID — which line (1/2) produced the part
 }
 
 const EMPTY_PART_INFO: PartInfoForOperator = {
@@ -111,6 +112,7 @@ const EMPTY_PART_INFO: PartInfoForOperator = {
   processedAt: null,
   shift: null,
   productionDate: null,
+  machine: null,
 };
 
 function normalizeInspectionResult(raw: string | null | undefined): 'OK' | 'FAIL' | null {
@@ -140,6 +142,7 @@ function buildPartInfo(records: SamLogRecord[]): PartInfoForOperator {
     processedAt,
     shift: cls?.shift ?? null,
     productionDate: cls?.productionDay ?? null,
+    machine: last.Line_ID ?? null,
   };
 }
 
