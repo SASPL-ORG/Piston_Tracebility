@@ -352,20 +352,52 @@ export function fetchPart(dmc: string): Promise<PartResponse> {
 
 // ---- Machine Status -------------------------------------------------------
 
-// v3 — PLC publishes mutually-exclusive state bits, so the cards map
-// directly: production ← RUNNING, machineHold ← FAULT, idle ← IDLE
-// (+ logging gaps), down = machineHold + idle.
-export interface MachineStatusResponse {
-  window: { from: string; to: string; totalSeconds: number };
+// v4 — per-machine tracks. Machine_State is now tagged with Line_ID, so each
+// machine gets its own dedicated KPIs, timeline band and stop list (no more
+// blending). production ← RUNNING, machineHold ← FAULT, idle ← IDLE (+ gaps),
+// down = machineHold + idle.
+export interface MachineStateBucket {
+  seconds: number;
+  pct: number;
+}
+
+// One chronological state block for the timeline band (epoch millis, IST).
+export interface MachineStateSegment {
+  state: string; // 'RUNNING' | 'FAULT' | 'IDLE'
+  startMs: number;
+  endMs: number;
+}
+
+// A period the machine was NOT running — "when did it stop", newest first.
+export interface MachineStop {
+  state: string; // 'FAULT' | 'IDLE'
+  startMs: number;
+  endMs: number;
+  seconds: number;
+}
+
+export interface MachineTrack {
+  line: number; // 1 = Machine 1, 2 = Machine 2
   stateSignalPresent: boolean;
-  production: { seconds: number; pct: number };
-  machineHold: { seconds: number; pct: number };
-  idle: { seconds: number; pct: number };
-  down: { seconds: number; pct: number };
+  production: MachineStateBucket;
+  machineHold: MachineStateBucket;
+  idle: MachineStateBucket;
+  down: MachineStateBucket;
+  // Seconds of the window that actually had per-line state data (prod+hold+idle)
+  // vs the full window length. Percentages above are of monitoredSeconds.
+  monitoredSeconds: number;
+  windowSeconds: number;
   partsProcessed: number;
   goodParts: number;
   topAlarms: { alarm: string; occurrences: number; seconds: number }[];
+  segments: MachineStateSegment[];
+  stops: MachineStop[];
   invariantOk: boolean;
+}
+
+export interface MachineStatusResponse {
+  window: { from: string; to: string; totalSeconds: number; startMs: number; endMs: number };
+  tracks: MachineTrack[];
   filtersIgnored?: boolean;
 }
 
@@ -376,6 +408,8 @@ export interface MachineStatusQuery {
   plant?: string;
   hourFrom?: string;
   hourTo?: string;
+  // Machine selector: '1' | '2' | undefined/'all' (both machines).
+  line?: string;
 }
 
 export function fetchMachineStatus(params: MachineStatusQuery): Promise<MachineStatusResponse> {

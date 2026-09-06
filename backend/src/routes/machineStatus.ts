@@ -9,31 +9,30 @@ import { merge, clip, intersect, totalSeconds, Iv } from '../utils/intervals.js'
 import { getOrComputeSWR } from '../utils/responseCache.js';
 
 // ---- Config -----------------------------------------------------------------
-// The PLC publishes three mutually-exclusive state bits, so the cards
-// derive directly from `dbo.vw_machine_state` — no cycle-time estimate
-// and no alarm-overlap inference. ALARM_EXCLUDE stays for the alarm
-// *detail* list only ("alarms active during faults") so the engineer
-// can hide pure status / "ready" signals from the diagnostic table
-// without affecting the headline math.
+// The PLC publishes three mutually-exclusive state bits (RUNNING / FAULT /
+// IDLE) into dbo.Machine_State, now tagged per machine with Line_ID (1 = Machine
+// 1, 2 = Machine 2). Each line is sequenced independently so the two machines
+// never blend. ALARM_EXCLUDE hides pure status / "ready" signals from the alarm
+// *detail* list only, without affecting the headline math.
 const alarmExclude: Set<string> = (() => {
   const raw = process.env.ALARM_EXCLUDE;
   if (!raw) return new Set<string>();
   return new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
 })();
 
-// Format a JS Date as a SQL Server naive-datetime string in IST
-// wall-clock. The container runs TZ=Asia/Kolkata (see docker-compose.yml)
-// so getFullYear()/getMonth()/… return IST components directly.
-//
-// Why this exists: dbo.Machine_State.ts and dbo.SAM_Log.Date_Time are
-// both written by SQL GETDATE() / Node-RED in IST wall-clock with NO
-// timezone tag. The tedious driver, given a JS Date, sends it using
-// UTC components — comparing IST-stored data against a UTC-binding
-// shifts everything by 5.5h and misses rows that should be in the
-// window. db/state.ts already binds the SAM_Log filters as strings
-// (`${date} 07:00:00`), which is why the parts query works; this
-// helper brings the state / alarm / parts queries onto the same
-// driver-independent footing. See machine_status_fix_state_window.md.
+// Machine line -> Plant_Id used in dbo.vw_machine_parts. The parts view
+// predates Line_ID and keys on the plant string, so we map the selector's
+// line to its plant for the parts KPI.
+const PLANT_BY_LINE: Record<number, string> = {
+  1: 'IPL Ring Assembly Machine - 1',
+  2: 'Sam Plant',
+};
+
+// Format a JS Date as a SQL Server naive-datetime string in IST wall-clock.
+// The container runs TZ=Asia/Kolkata, and Machine_State.ts / PLC_Alarms.LogTime
+// are written by SQL GETDATE() in IST wall-clock with NO timezone tag — so we
+// must bind the window as a wall-clock string, not let the driver send UTC
+// components (which would shift everything 5.5h). See machineStatus history.
 function toIstSqlString(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return (
@@ -43,14 +42,10 @@ function toIstSqlString(d: Date): string {
   );
 }
 
-// Inverse of the binding fix above. When SQL returns a naive IST
-// datetime (Machine_State.ts, vw_machine_state.state_start, etc.) the
-// mssql driver places the wall-clock components in the UTC slot of the
-// JS Date — so a row at "15:35:42 IST" comes back as a Date whose
-// .getTime() is the epoch for "15:35:42 UTC" (5.5h in the future).
-// Reconstruct as a local-TZ Date (container is Asia/Kolkata) so
-// .getTime() returns the true IST instant — same frame win.start /
-// win.end already live in.
+// Inverse of the binding fix. A naive-IST datetime returned by the driver has
+// its wall-clock components placed in the UTC slot of the JS Date; rebuild it
+// as a local-TZ (IST) Date so .getTime() is the true IST instant — the same
+// frame win.start / win.end live in.
 function sqlDateToIstMs(d: Date): number {
   return new Date(
     d.getUTCFullYear(),
@@ -63,323 +58,299 @@ function sqlDateToIstMs(d: Date): number {
   ).getTime();
 }
 
-// ---- Repository -------------------------------------------------------------
-// Reads only the views called out in the brief — never the raw tables.
-// The one exception is `Machine_State` itself for the "any rows in
-// window?" presence probe (the view doesn't expose that signal cleanly).
+// Past this gap from the last seen ts, an open segment stops being trusted as
+// "still in that state" — the Idle bucket absorbs the unknown seconds.
+const STATE_FRESHNESS_MS = 5 * 60 * 1000;
+
+// ---- Repository (base tables, filtered per line) ----------------------------
 interface StateRow { state: string; state_start: Date; state_end: Date | null }
 interface AlarmRow { alarm: string; alarm_start: Date; alarm_end: Date | null }
 interface PartsAgg { total: number; good: number }
 
-async function getStateSegments(start: Date, end: Date): Promise<StateRow[]> {
+// State segments for one machine. LEAD sequences that line's rows into
+// [start, end) intervals; filtering by Line_ID BEFORE the window keeps each
+// machine independent (no cross-machine blending).
+async function getStateSegments(start: Date, end: Date, line: number): Promise<StateRow[]> {
   const pool = await getPool();
   const r = await pool
     .request()
     .input('start', toIstSqlString(start))
     .input('end', toIstSqlString(end))
+    .input('line', line)
     .query(`
-      SELECT state, state_start, state_end
-      FROM dbo.vw_machine_state
-      WHERE state_start < @end
-        AND (state_end IS NULL OR state_end > @start)
+      WITH seg AS (
+        SELECT state, ts, LEAD(ts) OVER (ORDER BY ts, id) AS next_ts
+        FROM dbo.Machine_State WITH (NOLOCK)
+        WHERE Line_ID = @line
+      )
+      SELECT state, ts AS state_start, next_ts AS state_end
+      FROM seg
+      WHERE ts < @end AND (next_ts IS NULL OR next_ts > @start)
+      ORDER BY ts
     `);
   return r.recordset as StateRow[];
 }
 
-async function getAlarms(start: Date, end: Date): Promise<AlarmRow[]> {
+// Alarms for one machine — each ON paired with the next OFF of the same alarm
+// on the same line (so an OFF from the other machine can't close it).
+async function getAlarms(start: Date, end: Date, line: number): Promise<AlarmRow[]> {
   const pool = await getPool();
   const r = await pool
     .request()
     .input('start', toIstSqlString(start))
     .input('end', toIstSqlString(end))
+    .input('line', line)
     .query(`
-      SELECT alarm, alarm_start, alarm_end
-      FROM dbo.vw_machine_alarms
-      WHERE alarm_start < @end
-        AND (alarm_end IS NULL OR alarm_end > @start)
+      SELECT alarm, alarm_start, alarm_end FROM (
+        SELECT
+          a.Alarm AS alarm,
+          a.LogTime AS alarm_start,
+          (SELECT TOP 1 o.LogTime FROM dbo.PLC_Alarms o WITH (NOLOCK)
+             WHERE o.Alarm = a.Alarm AND o.Status = 'OFF'
+               AND o.Line_ID = a.Line_ID AND o.LogTime >= a.LogTime
+             ORDER BY o.LogTime ASC) AS alarm_end
+        FROM dbo.PLC_Alarms a WITH (NOLOCK)
+        WHERE a.Status = 'ON' AND a.Line_ID = @line
+      ) x
+      WHERE alarm_start < @end AND (alarm_end IS NULL OR alarm_end > @start)
     `);
   return r.recordset as AlarmRow[];
 }
 
-async function getPartsAgg(start: Date, end: Date, plant: string | undefined): Promise<PartsAgg> {
-  const pool = await getPool();
-  const req = pool
-    .request()
-    .input('start', toIstSqlString(start))
-    .input('end', toIstSqlString(end));
-  let plantClause = '';
-  if (plant) {
-    req.input('plant', plant);
-    plantClause = ' AND plant = @plant';
-  }
-  const r = await req.query(`
-    SELECT
-      COUNT(*) AS total,
-      SUM(CASE WHEN result = 'PASS' THEN 1 ELSE 0 END) AS good
-    FROM dbo.vw_machine_parts
-    WHERE completion_ts >= @start AND completion_ts < @end${plantClause}
-  `);
-  const row = r.recordset[0] ?? { total: 0, good: 0 };
-  return { total: row.total ?? 0, good: row.good ?? 0 };
-}
-
-// "Has the PLC + NR ever written a state row inside this window?"
-// Drives the no-signal banner. We probe the base table because the
-// view filters out gaps — a window with NO data at all yields zero
-// rows in the view too, which is indistinguishable from "PLC offline".
-async function stateDataPresent(start: Date, end: Date): Promise<boolean> {
+async function getPartsAgg(start: Date, end: Date, line: number): Promise<PartsAgg> {
   const pool = await getPool();
   const r = await pool
     .request()
     .input('start', toIstSqlString(start))
     .input('end', toIstSqlString(end))
-    .query(`SELECT TOP 1 1 AS n FROM dbo.Machine_State WHERE ts >= @start AND ts < @end`);
-  return r.recordset.length > 0;
+    .input('plant', PLANT_BY_LINE[line])
+    .query(`
+      SELECT COUNT(*) AS total,
+             SUM(CASE WHEN result = 'PASS' THEN 1 ELSE 0 END) AS good
+      FROM dbo.vw_machine_parts
+      WHERE completion_ts >= @start AND completion_ts < @end AND plant = @plant
+    `);
+  const row = r.recordset[0] ?? { total: 0, good: 0 };
+  return { total: row.total ?? 0, good: row.good ?? 0 };
 }
 
-// Most recent ts in Machine_State across all time. Used to clamp the
-// natural forward-extension of open segments (state_end IS NULL) — if
-// no new state row has been written for too long, the line's stream
-// has gone silent and we shouldn't keep crediting the last-known state
-// indefinitely.
-async function getLastStateTs(): Promise<Date | null> {
+async function stateDataPresent(start: Date, end: Date, line: number): Promise<boolean> {
   const pool = await getPool();
   const r = await pool
     .request()
-    .query(`SELECT MAX(ts) AS last_ts FROM dbo.Machine_State`);
+    .input('start', toIstSqlString(start))
+    .input('end', toIstSqlString(end))
+    .input('line', line)
+    .query(`SELECT TOP 1 1 AS n FROM dbo.Machine_State WITH (NOLOCK)
+            WHERE Line_ID = @line AND ts >= @start AND ts < @end`);
+  return r.recordset.length > 0;
+}
+
+async function getLastStateTs(line: number): Promise<Date | null> {
+  const pool = await getPool();
+  const r = await pool
+    .request()
+    .input('line', line)
+    .query(`SELECT MAX(ts) AS last_ts FROM dbo.Machine_State WITH (NOLOCK) WHERE Line_ID = @line`);
   return r.recordset[0]?.last_ts ?? null;
 }
 
-// Past this gap from the last seen ts, an open segment stops being
-// trusted as "still in that state" — the Idle bucket absorbs the
-// unknown seconds, per brief: "idle absorbs logging gaps + power-off".
-// 5 minutes is generous given that the live data shows transitions
-// every ~90 seconds during normal operation.
-const STATE_FRESHNESS_MS = 5 * 60 * 1000;
-
 // ---- Response shape ---------------------------------------------------------
-interface TopAlarmRow {
-  alarm: string;
-  occurrences: number;
-  seconds: number;
-}
-interface MachineStatusResponse {
-  window: { from: string; to: string; totalSeconds: number };
+interface TopAlarmRow { alarm: string; occurrences: number; seconds: number }
+interface SegmentRow { state: string; startMs: number; endMs: number }
+interface StopRow { state: string; startMs: number; endMs: number; seconds: number }
+interface Bucket { seconds: number; pct: number }
+
+interface MachineTrack {
+  line: number;
   stateSignalPresent: boolean;
-  production: { seconds: number; pct: number };
-  machineHold: { seconds: number; pct: number };
-  idle: { seconds: number; pct: number };
-  down: { seconds: number; pct: number };
+  production: Bucket;
+  machineHold: Bucket;
+  idle: Bucket;
+  down: Bucket;
+  // How much of the window actually had per-line state data (prod+hold+idle),
+  // and the full window length — so the UI can show coverage.
+  monitoredSeconds: number;
+  windowSeconds: number;
   partsProcessed: number;
   goodParts: number;
   topAlarms: TopAlarmRow[];
+  // Chronological state band for the timeline, clipped to the window.
+  segments: SegmentRow[];
+  // Non-RUNNING periods — "when did the machine stop" — newest first.
+  stops: StopRow[];
   invariantOk: boolean;
+}
+
+interface MachineStatusResponse {
+  // startMs/endMs are the window's epoch bounds (IST instants) so the frontend
+  // can position timeline segments exactly against the same frame.
+  window: { from: string; to: string; totalSeconds: number; startMs: number; endMs: number };
+  tracks: MachineTrack[];
   filtersIgnored?: boolean;
+}
+
+// Compute one machine's track (KPIs + timeline + stops) for the window.
+async function computeTrack(line: number, win: { start: Date; end: Date }): Promise<MachineTrack> {
+  const winMs: Iv = [win.start.getTime(), win.end.getTime()];
+  const totalSec = totalSeconds([winMs]);
+
+  const [segs, allAlarms, parts, signalPresent, lastStateTs] = await Promise.all([
+    getStateSegments(win.start, win.end, line),
+    getAlarms(win.start, win.end, line),
+    getPartsAgg(win.start, win.end, line),
+    stateDataPresent(win.start, win.end, line),
+    getLastStateTs(line),
+  ]);
+
+  const winStartMs = win.start.getTime();
+  const winEndMs = win.end.getTime();
+  const lastStateMs = lastStateTs ? sqlDateToIstMs(lastStateTs) : null;
+  const openSegmentEnd =
+    lastStateMs !== null ? Math.min(winEndMs, lastStateMs + STATE_FRESHNESS_MS) : winEndMs;
+
+  // Chronological, window-clipped segments for the timeline band.
+  const segments: SegmentRow[] = [];
+  for (const s of segs) {
+    const rawStart = sqlDateToIstMs(s.state_start);
+    const rawEnd = s.state_end ? sqlDateToIstMs(s.state_end) : openSegmentEnd;
+    const cs = Math.max(rawStart, winStartMs);
+    const ce = Math.min(rawEnd, winEndMs);
+    if (ce > cs) segments.push({ state: s.state, startMs: cs, endMs: ce });
+  }
+  segments.sort((a, b) => a.startMs - b.startMs);
+
+  // Per-state interval unions (defensive merge; states shouldn't overlap).
+  const ivByState = (st: string): Iv[] =>
+    merge(segments.filter((s) => s.state === st).map((s) => [s.startMs, s.endMs] as Iv));
+  const runningIvs = ivByState('RUNNING');
+  const faultIvs = ivByState('FAULT');
+
+  // Each bucket is measured DIRECTLY from that line's state segments — not
+  // "total - prod - hold". This matters because Line_ID only began populating
+  // when Node-RED was updated, so a window can contain long stretches with NO
+  // per-line data (e.g. before the cutover). Counting that unmonitored time as
+  // idle would be wrong; instead we base percentages on the MONITORED time
+  // (sum of the line's state segments) and expose how much of the window was
+  // actually covered.
+  const prodSec = totalSeconds(runningIvs);
+  const holdSec = totalSeconds(faultIvs);
+  const idleSec = totalSeconds(ivByState('IDLE'));
+  const monitoredSec = prodSec + holdSec + idleSec;
+  const downSec = holdSec + idleSec;
+  const invariantOk = true;
+
+  // Stops = every non-RUNNING segment, newest first, so the operator sees
+  // exactly when (and how long) the machine was down. Sub-2s blips (the PLC
+  // momentarily passing through IDLE between RUNNING and FAULT) are dropped
+  // from the list — they're noise — but still drawn on the band.
+  const stops: StopRow[] = segments
+    .filter((s) => s.state !== 'RUNNING' && s.endMs - s.startMs >= 2000)
+    .map((s) => ({ ...s, seconds: Math.round((s.endMs - s.startMs) / 1000) }))
+    .sort((a, b) => b.startMs - a.startMs);
+
+  // ---- Alarms-in-window breakdown (duration ON while the PLC was in FAULT).
+  // Stuck-on background signals (ON since before the window) are dropped.
+  const alarmsFiltered = allAlarms.filter((a) => !alarmExclude.has(a.alarm));
+  const perAlarmIvs = new Map<string, { occurrences: number; ivs: Iv[] }>();
+  for (const a of alarmsFiltered) {
+    const start = sqlDateToIstMs(a.alarm_start);
+    if (start < winStartMs) continue; // background / pre-existing signal
+    const end = a.alarm_end ? sqlDateToIstMs(a.alarm_end) : winEndMs;
+    const clipped = clip([[start, end] as Iv], winMs);
+    if (clipped.length === 0) continue;
+    const cur = perAlarmIvs.get(a.alarm) ?? { occurrences: 0, ivs: [] };
+    cur.occurrences += 1;
+    cur.ivs.push(...clipped);
+    perAlarmIvs.set(a.alarm, cur);
+  }
+  const topAlarms: TopAlarmRow[] = Array.from(perAlarmIvs.entries())
+    .map(([alarm, agg]) => {
+      const overlap = intersect(merge(agg.ivs), faultIvs);
+      let ms = 0;
+      for (const [s, e] of overlap) ms += e - s;
+      return { alarm, occurrences: agg.occurrences, seconds: Math.round(ms / 1000) };
+    })
+    .sort((a, b) => {
+      if (b.seconds !== a.seconds) return b.seconds - a.seconds;
+      if (b.occurrences !== a.occurrences) return b.occurrences - a.occurrences;
+      return a.alarm.localeCompare(b.alarm);
+    });
+
+  // Percentages are of MONITORED time so today's cutover (part of the window
+  // has no per-line data) doesn't read as "96% idle".
+  const denom = monitoredSec > 0 ? monitoredSec : 1;
+  const pct = (n: number) => Math.round((n / denom) * 1000) / 10;
+  return {
+    line,
+    stateSignalPresent: signalPresent,
+    production: { seconds: prodSec, pct: pct(prodSec) },
+    machineHold: { seconds: holdSec, pct: pct(holdSec) },
+    idle: { seconds: idleSec, pct: pct(idleSec) },
+    down: { seconds: downSec, pct: pct(downSec) },
+    monitoredSeconds: monitoredSec,
+    windowSeconds: totalSec,
+    partsProcessed: parts.total,
+    goodParts: parts.good,
+    topAlarms,
+    segments,
+    stops,
+    invariantOk,
+  };
+}
+
+// Selector -> which machine lines to render. '1'/'2' pick one; anything else
+// ('all' / 'both' / undefined) returns both machines, each dedicated.
+function linesInScope(line: string | undefined): number[] {
+  if (line === '1') return [1];
+  if (line === '2') return [2];
+  return [1, 2];
 }
 
 // ---- Route ------------------------------------------------------------------
 export default async function machineStatusRoutes(app: FastifyInstance) {
   app.get<{
-    Querystring: MachineWindowInputs & { plant?: string };
+    Querystring: MachineWindowInputs & { plant?: string; line?: string };
   }>('/machine-status', async (req) => {
-    // Single-flight + stale-while-revalidate — same protection as the
-    // dashboard/list. The alarm/downtime aggregation is a few seconds cold;
-    // SWR serves it instantly once warm and keeps the 30s auto-refresh from
-    // stacking concurrent recomputes.
     return getOrComputeSWR(req.url, 30_000, async () => {
-    const win = resolveMachineWindow(req.query);
-    const winMs: Iv = [win.start.getTime(), win.end.getTime()];
-    const totalSec = totalSeconds([winMs]);
+      const win = resolveMachineWindow(req.query);
+      const totalSec = totalSeconds([[win.start.getTime(), win.end.getTime()]]);
+      const lines = linesInScope(req.query.line);
 
-    // Zero-length / future-only window: respond cleanly without
-    // hitting the database.
-    if (totalSec <= 0) {
-      const empty: MachineStatusResponse = {
-        window: { from: formatIstIso(win.start), to: formatIstIso(win.end), totalSeconds: 0 },
-        stateSignalPresent: false,
-        production:  { seconds: 0, pct: 0 },
-        machineHold: { seconds: 0, pct: 0 },
-        idle:        { seconds: 0, pct: 0 },
-        down:        { seconds: 0, pct: 0 },
-        partsProcessed: 0,
-        goodParts: 0,
-        topAlarms: [],
-        invariantOk: true,
+      if (totalSec <= 0) {
+        const empty: MachineStatusResponse = {
+          window: {
+            from: formatIstIso(win.start),
+            to: formatIstIso(win.end),
+            totalSeconds: 0,
+            startMs: win.start.getTime(),
+            endMs: win.end.getTime(),
+          },
+          tracks: [],
+          ...(win.filtersIgnored ? { filtersIgnored: true } : {}),
+        };
+        return empty;
+      }
+
+      const tracks = await Promise.all(lines.map((l) => computeTrack(l, win)));
+
+      const response: MachineStatusResponse = {
+        window: {
+          from: formatIstIso(win.start),
+          to: formatIstIso(win.end),
+          totalSeconds: totalSec,
+          startMs: win.start.getTime(),
+          endMs: win.end.getTime(),
+        },
+        tracks,
         ...(win.filtersIgnored ? { filtersIgnored: true } : {}),
       };
-      req.log.info(`[machine-status] empty window from=${empty.window.from} to=${empty.window.to}`);
-      return empty;
-    }
-
-    // Temporary debug log (per machine_status_fix_state_window.md) so the
-    // bound @start/@end + the stateDataPresent result are visible while
-    // confirming the IST wall-clock binding fix. Remove once verified.
-    req.log.info(
-      `[machine-status] bind @start='${toIstSqlString(win.start)}' @end='${toIstSqlString(win.end)}'`,
-    );
-
-    const [segs, allAlarms, parts, signalPresent, lastStateTs] = await Promise.all([
-      getStateSegments(win.start, win.end),
-      getAlarms(win.start, win.end),
-      getPartsAgg(win.start, win.end, req.query.plant),
-      stateDataPresent(win.start, win.end),
-      getLastStateTs(),
-    ]);
-
-    // Cap any open segment's natural extension at lastStateTs + freshness
-    // window. If the PLC stopped emitting hours ago, an open IDLE/RUNNING
-    // segment from then-and-there shouldn't keep crediting state to the
-    // current window — that gap is "signal lost" and folds into Idle.
-    const winEndMsForClamp = win.end.getTime();
-    const lastStateMs = lastStateTs ? sqlDateToIstMs(lastStateTs) : null;
-    const openSegmentEnd =
-      lastStateMs !== null
-        ? Math.min(winEndMsForClamp, lastStateMs + STATE_FRESHNESS_MS)
-        : winEndMsForClamp;
-
-    req.log.info(
-      `[machine-status] state rows fetched: segs=${segs.length} signalPresent=${signalPresent} ` +
-        `lastStateMs=${lastStateMs ?? 'null'} openSegmentEnd=${openSegmentEnd}`,
-    );
-
-    // Build per-state interval lists: each segment clipped to the
-    // window, NULL state_end clamped to window end. Then per-state
-    // union via merge so overlapping segments (shouldn't happen, but
-    // costs nothing to defend against) don't double-count.
-    //
-    // sqlDateToIstMs converts the naive-IST Date the driver returns
-    // into a real IST instant — without this, every segment looks
-    // 5.5h in the future and falls outside the window.
-    const winEndMs = win.end.getTime();
-    const ivByState = (st: string): Iv[] => {
-      const raw: Iv[] = segs
-        .filter((s) => s.state === st)
-        .map((s) => [
-          sqlDateToIstMs(s.state_start),
-          // Closed segment: use its real state_end.
-          // Open segment (state_end IS NULL): extend to openSegmentEnd,
-          // which is capped at lastStateTs+freshness so a stale stream
-          // doesn't fake state seconds into the present.
-          s.state_end ? sqlDateToIstMs(s.state_end) : openSegmentEnd,
-        ] as Iv);
-      return clip(merge(raw), winMs);
-    };
-
-    const runningIvs = ivByState('RUNNING');
-    const faultIvs   = ivByState('FAULT');
-    const idleIvs    = ivByState('IDLE');
-
-    const prodSec = totalSeconds(runningIvs);
-    const holdSec = totalSeconds(faultIvs);
-    // Idle = the state's own intervals PLUS any unaccounted gap
-    // (logging dropouts, PLC offline, power off). Computing it as
-    // `total - prod - hold` rather than summing IDLE segments lets
-    // those gaps fold into Idle, per brief.
-    const stateIdleSec = totalSeconds(idleIvs);
-    const idleSec = Math.max(0, totalSec - prodSec - holdSec);
-    const downSec = holdSec + idleSec;
-
-    // Invariant — overlapping states (PLC bug) would show as negative
-    // raw idleSec before the Math.max clamp. Surface it without
-    // breaking the response.
-    const invariantOk = totalSec - prodSec - holdSec >= -1;
-    if (!invariantOk) {
-      req.log.warn(
-        `[machine-status] state overlap detected: total=${totalSec} prod=${prodSec} hold=${holdSec} stateIdle=${stateIdleSec}`,
+      req.log.info(
+        `[machine-status] from=${response.window.from} to=${response.window.to} ` +
+          `lines=${lines.join(',')} tracks=${tracks.length}` +
+          (win.filtersIgnored ? ' (shift/hour ignored, multi-day)' : ''),
       );
-    }
-
-    // ---- Alarms-in-window breakdown ----
-    //
-    // For each alarm that transitioned ON within this window, show:
-    //  - occurrences = number of fresh ON events
-    //  - seconds     = time during which that alarm was ON AND the PLC
-    //                  was reporting FAULT (union of alarm intervals ∩
-    //                  union of fault intervals)
-    //
-    // Stuck-on background signals are filtered out by checking
-    // alarm.start < window.start — those are status flags that have been
-    // ON since before the window began (e.g. CONTROL NOT ON, EXPANDER STN
-    // - NOT READY TO ASSEMBLY). They're "active" during every fault
-    // because they're "active" always; including them made every fault
-    // second get credited to a dozen signals at once. By contrast a real
-    // alarm that pulses ON inside the window has a fresh start time and
-    // shows up correctly with its actual contribution.
-    //
-    // We do NOT use a triggering-only attribution here — that was too
-    // restrictive. If two alarms fired during overlapping fault windows,
-    // both deserve credit for the time they were each ON during fault.
-    // Sums across distinct alarms can therefore exceed total Machine /
-    // Alarm hold when alarms genuinely overlap each other; that's
-    // expected and explained in the page subtitle.
-    const winStartMs = win.start.getTime();
-    const alarmsFiltered = allAlarms.filter((a) => !alarmExclude.has(a.alarm));
-    const alarmIntervals = alarmsFiltered.map((a) => ({
-      alarm: a.alarm,
-      start: sqlDateToIstMs(a.alarm_start),
-      end: a.alarm_end ? sqlDateToIstMs(a.alarm_end) : winEndMs,
-    }));
-
-    const perAlarmIvs = new Map<string, { occurrences: number; ivs: Iv[] }>();
-    for (const a of alarmIntervals) {
-      // Stuck-on guard: only count occurrences whose ON-transition lies
-      // within the window. Pre-existing ON states (alarm rows whose
-      // alarm_start predates the window) are background signals, not
-      // events — they get dropped here.
-      if (a.start < winStartMs) continue;
-      const clipped = clip([[a.start, a.end] as Iv], winMs);
-      if (clipped.length === 0) continue;
-      const cur = perAlarmIvs.get(a.alarm) ?? { occurrences: 0, ivs: [] };
-      cur.occurrences += 1;
-      cur.ivs.push(...clipped);
-      perAlarmIvs.set(a.alarm, cur);
-    }
-
-    const perAlarm = new Map<string, { occurrences: number; seconds: number }>();
-    for (const [name, agg] of perAlarmIvs) {
-      const overlap = intersect(merge(agg.ivs), faultIvs);
-      let ms = 0;
-      for (const [s, e] of overlap) ms += (e - s);
-      perAlarm.set(name, {
-        occurrences: agg.occurrences,
-        seconds: Math.round(ms / 1000),
-      });
-    }
-    // Sort by duration in fault desc; ties broken by occurrence count
-    // (an alarm that fired 10 times but accumulated 0 fault seconds
-    // still ranks above one with 0 occurrences) then by name for
-    // deterministic output.
-    const topAlarms: TopAlarmRow[] = Array.from(perAlarm.entries())
-      .map(([alarm, v]) => ({ alarm, occurrences: v.occurrences, seconds: v.seconds }))
-      .sort((a, b) => {
-        if (b.seconds !== a.seconds) return b.seconds - a.seconds;
-        if (b.occurrences !== a.occurrences) return b.occurrences - a.occurrences;
-        return a.alarm.localeCompare(b.alarm);
-      });
-
-    const pct = (n: number) => Math.round((n / totalSec) * 1000) / 10;
-
-    const response: MachineStatusResponse = {
-      window: { from: formatIstIso(win.start), to: formatIstIso(win.end), totalSeconds: totalSec },
-      stateSignalPresent: signalPresent,
-      production:  { seconds: prodSec, pct: pct(prodSec) },
-      machineHold: { seconds: holdSec, pct: pct(holdSec) },
-      idle:        { seconds: idleSec, pct: pct(idleSec) },
-      down:        { seconds: downSec, pct: pct(downSec) },
-      partsProcessed: parts.total,
-      goodParts: parts.good,
-      topAlarms,
-      invariantOk,
-      ...(win.filtersIgnored ? { filtersIgnored: true } : {}),
-    };
-
-    req.log.info(
-      `[machine-status] from=${response.window.from} to=${response.window.to} ` +
-        `total=${totalSec}s prod=${prodSec}s hold=${holdSec}s idle=${idleSec}s down=${downSec}s ` +
-        `parts=${parts.total} signal=${signalPresent} alarmsInFault=${topAlarms.length}` +
-        (win.filtersIgnored ? ' (shift/hour ignored, multi-day)' : ''),
-    );
-    return response;
+      return response;
     });
   });
 }
