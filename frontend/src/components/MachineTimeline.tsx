@@ -97,8 +97,11 @@ export default function MachineTimeline({
 
       {/* Stop list — exactly when the machine was not producing, newest first */}
       <div className="mt-4">
-        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-2">
+        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1">
           Stops &amp; idle periods ({stops.length})
+        </p>
+        <p className="text-[11px] text-gray-400 mb-2">
+          All faults, plus idle periods over 1 minute (short inter-cycle idles are hidden).
         </p>
         {stops.length === 0 ? (
           <p className="text-sm text-gray-500">No stops in this window — machine ran continuously.</p>

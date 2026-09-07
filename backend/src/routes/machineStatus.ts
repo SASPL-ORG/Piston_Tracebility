@@ -209,16 +209,31 @@ async function computeTrack(line: number, win: { start: Date; end: Date }): Prom
   const openSegmentEnd =
     lastStateMs !== null ? Math.min(winEndMs, lastStateMs + STATE_FRESHNESS_MS) : winEndMs;
 
-  // Chronological, window-clipped segments for the timeline band.
-  const segments: SegmentRow[] = [];
+  // Chronological, window-clipped raw segments.
+  const rawSegs: SegmentRow[] = [];
   for (const s of segs) {
     const rawStart = sqlDateToIstMs(s.state_start);
     const rawEnd = s.state_end ? sqlDateToIstMs(s.state_end) : openSegmentEnd;
     const cs = Math.max(rawStart, winStartMs);
     const ce = Math.min(rawEnd, winEndMs);
-    if (ce > cs) segments.push({ state: s.state, startMs: cs, endMs: ce });
+    if (ce > cs) rawSegs.push({ state: s.state, startMs: cs, endMs: ce });
   }
-  segments.sort((a, b) => a.startMs - b.startMs);
+  rawSegs.sort((a, b) => a.startMs - b.startMs);
+
+  // Coalesce consecutive same-state rows into one period. The PLC heartbeat
+  // writes a row every 60s even when the state doesn't change, which would
+  // otherwise fragment a continuous idle/run into dozens of 1-minute blocks
+  // (and hundreds of bogus "stops"). Merge touching/overlapping same-state
+  // spans so the band and the stop list show real periods.
+  const segments: SegmentRow[] = [];
+  for (const s of rawSegs) {
+    const last = segments[segments.length - 1];
+    if (last && last.state === s.state && s.startMs <= last.endMs + 90_000) {
+      last.endMs = Math.max(last.endMs, s.endMs);
+    } else {
+      segments.push({ ...s });
+    }
+  }
 
   // Per-state interval unions (defensive merge; states shouldn't overlap).
   const ivByState = (st: string): Iv[] =>
@@ -240,13 +255,17 @@ async function computeTrack(line: number, win: { start: Date; end: Date }): Prom
   const downSec = holdSec + idleSec;
   const invariantOk = true;
 
-  // Stops = every non-RUNNING segment, newest first, so the operator sees
-  // exactly when (and how long) the machine was down. Sub-2s blips (the PLC
-  // momentarily passing through IDLE between RUNNING and FAULT) are dropped
-  // from the list — they're noise — but still drawn on the band.
+  // Stops list = periods the machine wasn't producing, newest first, so the
+  // operator sees exactly when (and how long) it was down. FAULTs always
+  // matter (show >=2s). But during normal production the line toggles
+  // RUNNING->IDLE->RUNNING every part cycle, so a short IDLE is just the gap
+  // between parts, not a real stop — only IDLE periods >=60s are listed.
+  // Everything is still drawn on the band regardless.
+  const STOP_IDLE_MIN_SEC = 60;
   const stops: StopRow[] = segments
-    .filter((s) => s.state !== 'RUNNING' && s.endMs - s.startMs >= 2000)
+    .filter((s) => s.state !== 'RUNNING')
     .map((s) => ({ ...s, seconds: Math.round((s.endMs - s.startMs) / 1000) }))
+    .filter((s) => (s.state === 'FAULT' ? s.seconds >= 2 : s.seconds >= STOP_IDLE_MIN_SEC))
     .sort((a, b) => b.startMs - a.startMs);
 
   // ---- Alarms-in-window breakdown (duration ON while the PLC was in FAULT).
