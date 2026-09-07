@@ -259,6 +259,23 @@ export interface EventTimelineStep {
   substations?: EventTimelineSubStation[];
 }
 
+// A re-run of the same DMC after the original — its own timeline, shown below
+// the main one so the original run's data is never overwritten by a re-attempt.
+export interface PartReattemptEvent {
+  station_no: number;
+  label: string;
+  timestamp: string | null;
+  status: 'OK' | 'FAIL' | null;
+  reason: string | null;
+}
+export interface PartReattempt {
+  run: number;
+  line: number | null;
+  started_at: string | null;
+  outcome: string | null;
+  events: PartReattemptEvent[];
+}
+
 export interface PartResponse {
   dmc: string;
   total_records: number;
@@ -266,6 +283,7 @@ export interface PartResponse {
   summary: PartTraceSummary;
   alarms: AlarmEvent[];
   event_timeline: EventTimelineStep[];
+  reattempts?: PartReattempt[];
 }
 
 export function fetchDashboard(

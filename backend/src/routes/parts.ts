@@ -41,6 +41,36 @@ interface StationEventRow {
   Reason: string | null;
 }
 
+// Full Station_Events row (with Station_Name + Line_ID) used for run grouping.
+interface StationEventRowExt {
+  Station_No: number;
+  Station_Name: string | null;
+  Event_Time: string | null;
+  Result: string | null;
+  Reason: string | null;
+  Line_ID: number | null;
+}
+
+// One event inside a re-attempt run's timeline.
+interface ReattemptEvent {
+  station_no: number;
+  label: string;
+  timestamp: string | null;
+  status: 'OK' | 'FAIL' | null;
+  reason: string | null;
+}
+
+// A re-run of the same DMC (after the original), shown as its own timeline at
+// the bottom of Part Trace. `outcome` carries the rejection reason when the
+// run was blocked (e.g. "ALREADY PROCESSED PART").
+interface PartReattempt {
+  run: number; // 2, 3, …
+  line: number | null;
+  started_at: string | null;
+  outcome: string | null;
+  events: ReattemptEvent[];
+}
+
 // The 5 physical ring-assembly sub-stations, in line order, each mapped to
 // its PLC/Node-RED station number (St10-14 in dbo.Station_Events). The
 // timeline lights each one green the moment Node-RED logs that station's
@@ -301,31 +331,60 @@ async function fetchPartRecords(dmc: string): Promise<SamLogRecord[]> {
 // a later Id wins so re-runs resolve to the most recent completion. Station_Events
 // is optional infrastructure: a missing table or query error degrades to an empty
 // map (SAM_Log-only timeline) rather than failing the whole Part Trace.
-async function fetchStationEvents(
+// Loads ALL per-station events for this DMC, ordered chronologically, and
+// groups them into RUNS. A part loaded, removed mid-cycle, then re-run (same
+// line OR the other machine) produces a second pass through the same stations.
+// We start a new run whenever a station number repeats or the Line_ID changes.
+// This lets Part Trace show the ORIGINAL run authoritatively and each
+// re-attempt separately, instead of a later run silently overwriting the
+// earlier one in a latest-wins map (which is what "changed the actual data").
+async function fetchStationRuns(
   dmc: string | null | undefined,
-): Promise<Map<number, StationEvent>> {
-  const map = new Map<number, StationEvent>();
-  if (!dmc) return map;
+): Promise<StationEventRowExt[][]> {
+  if (!dmc) return [];
   try {
     const pool = await getPool();
     const result = await pool
       .request()
       .input('dmc', dmc)
       .query(
-        `SELECT Station_No, Event_Time, Result, Reason
+        `SELECT Station_No, Station_Name, Event_Time, Result, Reason, Line_ID
          FROM dbo.Station_Events WHERE DMC = @dmc ORDER BY Id ASC`,
       );
-    for (const r of result.recordset as StationEventRow[]) {
-      map.set(r.Station_No, {
-        // Event_Time is a server wall-clock string ('YYYY-MM-DD HH:mm:ss');
-        // the frontend's formatDateTime accepts the space separator as-is.
-        timestamp: r.Event_Time ?? null,
-        status: r.Result == null ? null : r.Result === 'OK' ? 'OK' : 'FAIL',
-        reason: r.Reason ?? null,
-      });
+    const rows = result.recordset as StationEventRowExt[];
+    const runs: StationEventRowExt[][] = [];
+    let cur: StationEventRowExt[] = [];
+    let seen = new Set<number>();
+    for (const r of rows) {
+      const lineChanged =
+        cur.length > 0 && cur[0].Line_ID != null && r.Line_ID != null && r.Line_ID !== cur[0].Line_ID;
+      if (cur.length > 0 && (seen.has(r.Station_No) || lineChanged)) {
+        runs.push(cur);
+        cur = [];
+        seen = new Set<number>();
+      }
+      cur.push(r);
+      seen.add(r.Station_No);
     }
+    if (cur.length > 0) runs.push(cur);
+    return runs;
   } catch {
-    // swallow — see note above.
+    // Station_Events is optional infra — degrade to no runs (SAM_Log-only view).
+    return [];
+  }
+}
+
+// Station_no -> event map for the MAIN timeline, built from ONE run (the
+// original). Within a single run each station appears once, so a later re-run
+// can never overwrite the original data.
+function buildStationMap(run: StationEventRowExt[]): Map<number, StationEvent> {
+  const map = new Map<number, StationEvent>();
+  for (const r of run) {
+    map.set(r.Station_No, {
+      timestamp: r.Event_Time ?? null,
+      status: r.Result == null ? null : r.Result === 'OK' ? 'OK' : 'FAIL',
+      reason: r.Reason ?? null,
+    });
   }
   return map;
 }
@@ -376,6 +435,23 @@ async function fetchPackedInfo(
   return { packed: true, packedAt };
 }
 
+// Whether an operator manually quality-rejected this DMC (a Reject-mode Zebra
+// scan wrote Packed_Log_TEST.Result='QUALITY_REJECT'). Lists treats this as the
+// top-priority state; Part Trace must agree, so the two pages never disagree.
+async function fetchQualityRejected(dmc: string | null | undefined): Promise<boolean> {
+  if (!dmc) return false;
+  try {
+    const pool = await getPool();
+    const r = await pool
+      .request()
+      .input('dmc', dmc)
+      .query(`SELECT TOP 1 1 AS x FROM dbo.Packed_Log_TEST WITH (NOLOCK) WHERE DMC = @dmc AND Result = 'QUALITY_REJECT'`);
+    return r.recordset.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 export default async function partRoutes(app: FastifyInstance) {
   app.get<{ Params: PartParams }>('/part/:dmc', async (req, reply) => {
     const { dmc } = req.params;
@@ -394,10 +470,29 @@ export default async function partRoutes(app: FastifyInstance) {
     // Per-station events are keyed by the STORED DMC (records[0].DMC), which
     // matches Station_Events exactly — the request param may be a raw scan that
     // only matched via the separator-insensitive fallback.
-    const [stationEvents, packedInfo] = await Promise.all([
-      fetchStationEvents(records[0].DMC),
+    const [stationRuns, packedInfo, qualityRejected] = await Promise.all([
+      fetchStationRuns(records[0].DMC),
       fetchPackedInfo(records[0].DMC),
+      fetchQualityRejected(records[0].DMC),
     ]);
+    // Main timeline uses only the ORIGINAL run, so a later re-run can't
+    // overwrite the first run's station results ("keep first run's state").
+    const stationEvents = buildStationMap(stationRuns[0] ?? []);
+    // Runs 2+ are re-attempts (same DMC loaded again, same line or the other
+    // machine) — surfaced as their own timelines at the bottom of Part Trace.
+    const reattempts: PartReattempt[] = stationRuns.slice(1).map((run, i) => ({
+      run: i + 2,
+      line: run[0]?.Line_ID ?? null,
+      started_at: run[0]?.Event_Time ?? null,
+      outcome: run.find((r) => r.Result === 'NOT_OK' && r.Reason)?.Reason ?? null,
+      events: run.map((r) => ({
+        station_no: r.Station_No,
+        label: r.Station_Name ?? `Station ${r.Station_No}`,
+        timestamp: r.Event_Time ?? null,
+        status: r.Result == null ? null : r.Result === 'OK' ? 'OK' : 'FAIL',
+        reason: r.Reason ?? null,
+      })),
+    }));
 
     serializeDateTimeFields(records as unknown as Record<string, unknown>[]);
     const lastRow = records[records.length - 1];
@@ -453,7 +548,11 @@ export default async function partRoutes(app: FastifyInstance) {
         // reachedAssembly = St6 (snap-ring assembly) logged for this DMC — the
         // true "reached circlip assembly" signal, so a just-assembled piston
         // reads IN_PROGRESS instead of a transient ABORTED (matches the timeline).
-        state: classifyDisplayState(latest, hasCirclipFail, packedInfo.packed, stationEvents.has(6)),
+        // Quality Reject is top-priority and overrides the derived line state
+        // — same rule Lists uses, so Part Trace and Lists never disagree.
+        state: qualityRejected
+          ? 'QUALITY_REJECTED'
+          : classifyDisplayState(latest, hasCirclipFail, packedInfo.packed, stationEvents.has(6)),
         total_attempts: totalAttempts,
         reinspected,
         latest,
@@ -466,6 +565,7 @@ export default async function partRoutes(app: FastifyInstance) {
       },
       alarms,
       event_timeline,
+      reattempts,
     };
     return response;
   });

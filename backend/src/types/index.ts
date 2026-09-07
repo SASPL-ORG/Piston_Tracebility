@@ -227,6 +227,24 @@ export interface EventTimelineStep {
   substations?: EventTimelineSubStation[];
 }
 
+// A re-run of the same DMC after the original (same line or the other
+// machine). Surfaced as its own timeline at the bottom of Part Trace so a
+// re-attempt never overwrites the original run's recorded results.
+export interface PartReattemptEvent {
+  station_no: number;
+  label: string;
+  timestamp: string | null;
+  status: 'OK' | 'FAIL' | null;
+  reason: string | null;
+}
+export interface PartReattempt {
+  run: number;
+  line: number | null;
+  started_at: string | null;
+  outcome: string | null;
+  events: PartReattemptEvent[];
+}
+
 export interface PartTraceResponse {
   dmc: string;
   total_records: number;
@@ -234,6 +252,8 @@ export interface PartTraceResponse {
   summary: PartTraceSummary;
   alarms: AlarmEvent[];
   event_timeline: EventTimelineStep[];
+  // Empty for a normal single-run part; one entry per re-run otherwise.
+  reattempts: PartReattempt[];
 }
 
 export interface ImageItem {

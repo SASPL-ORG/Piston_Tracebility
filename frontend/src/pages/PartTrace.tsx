@@ -85,6 +85,7 @@ export default function PartTrace() {
   const summary = response?.summary;
   const alarms = response?.alarms ?? [];
   const eventTimeline = response?.event_timeline ?? [];
+  const reattempts = response?.reattempts ?? [];
 
   return (
     <div className="space-y-6">
@@ -354,6 +355,59 @@ export default function PartTrace() {
             </div>
             <EventTimeline steps={eventTimeline} />
           </div>
+
+          {/* Re-attempts — the same DMC loaded again (same line or the other
+              machine). The original run above is kept unchanged; each re-run
+              is recorded here separately with its own result/reason. */}
+          {reattempts.length > 0 && (
+            <div className="bg-white rounded-xl border border-amber-200 shadow-sm p-5">
+              <div className="flex items-center gap-3 mb-1">
+                <div className="w-1 h-6 bg-amber-500 rounded-full" />
+                <h2 className="text-lg font-semibold text-gray-800">Re-attempts</h2>
+                <span className="text-xs text-gray-500">this DMC was loaded again after the original run</span>
+              </div>
+              <p className="text-xs text-gray-500 mb-4">
+                The original run above is kept exactly as recorded. Each re-run of the same part is stored
+                and shown here separately — it does not change the first run's data.
+              </p>
+              <div className="space-y-4">
+                {reattempts.map((ra) => (
+                  <div key={ra.run} className="rounded-lg border border-gray-200 overflow-hidden">
+                    <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 flex flex-wrap items-center gap-2">
+                      <span className="font-semibold text-amber-900">Run {ra.run}</span>
+                      {ra.line != null && <span className="text-xs text-amber-800">· Machine {ra.line}</span>}
+                      {ra.started_at && <span className="text-xs text-amber-800">· {formatDateTime(ra.started_at)}</span>}
+                      {ra.outcome && (
+                        <span className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wide bg-red-100 text-red-800">
+                          Rejected: {ra.outcome}
+                        </span>
+                      )}
+                    </div>
+                    <table className="w-full text-sm">
+                      <tbody className="divide-y divide-gray-100">
+                        {ra.events.map((e, i) => (
+                          <tr key={i} className="hover:bg-gray-50/50">
+                            <td className="px-4 py-1.5 text-gray-800">{e.label}</td>
+                            <td className="px-4 py-1.5">
+                              {e.status === 'OK' ? (
+                                <span className="text-emerald-700 font-semibold">OK</span>
+                              ) : e.status === 'FAIL' ? (
+                                <span className="text-red-700 font-semibold">NOT OK</span>
+                              ) : (
+                                <span className="text-gray-400">—</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-1.5 text-gray-500">{e.reason || ''}</td>
+                            <td className="px-4 py-1.5 text-right text-gray-500 tabular-nums whitespace-nowrap">{formatDateTime(e.timestamp)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </>
       )}
 
