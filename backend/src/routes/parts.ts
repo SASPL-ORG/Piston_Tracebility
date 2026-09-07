@@ -154,18 +154,26 @@ function buildEventTimeline(
   // time, a result, or a rejection reason); grey/pending otherwise. A rejection
   // reason counts as a fail even when Circlip_Result was never written
   // (recipe/barcode mismatch, abnormal part, groove anodizing missing).
-  const circlipFail =
-    earliest.Circlip_Result === 'FAIL' || isRejectionReason(earliest.Circlip_Rejection_Reason);
-  const circlipDone =
-    !!earliest.Circlip_Time || earliest.Circlip_Result != null || circlipFail;
+  // Prefer the ORIGINAL run's Snap Ring Inspection station event (St7) over the
+  // SAM_Log circlip fields: a later re-run overwrites SAM_Log's single row (its
+  // Circlip_Result / rejection reason), but the station map here is built from
+  // the first run only, so it holds the true original result and can't be
+  // clobbered. Fall back to SAM_Log for parts with no St7 event (historical).
+  const insp = stationEvents.get(7);
+  const circlipFail = insp
+    ? insp.status === 'FAIL'
+    : earliest.Circlip_Result === 'FAIL' || isRejectionReason(earliest.Circlip_Rejection_Reason);
+  const circlipDone = insp
+    ? true
+    : !!earliest.Circlip_Time || earliest.Circlip_Result != null || circlipFail;
   if (circlipDone) {
     timeline.push({
       step: 7,
       label: 'Snap Ring Inspection',
       type: 'checkpoint',
-      timestamp: earliest.Circlip_Time,
+      timestamp: insp?.timestamp ?? earliest.Circlip_Time,
       status: circlipFail ? 'FAIL' : 'OK',
-      reason: circlipFail ? (earliest.Circlip_Rejection_Reason ?? null) : null,
+      reason: circlipFail ? (insp?.reason ?? earliest.Circlip_Rejection_Reason ?? null) : null,
     });
     // Snap-ring scrap is terminal — the part never reaches the ring stations.
     if (circlipFail) {
