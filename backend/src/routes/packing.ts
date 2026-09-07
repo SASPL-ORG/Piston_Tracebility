@@ -660,6 +660,31 @@ export default async function packingRoutes(app: FastifyInstance) {
     }
   });
 
+  // Undo a manual Quality Reject ("Make OK") — removes the QUALITY_REJECT
+  // marker so the part returns to its line state and can be packed again.
+  // Gated in the UI by the admin login (requireAdmin), matching the demo-hide /
+  // tool-life model where the mutation trusts the single-host LAN deployment.
+  app.post<{ Body: { dmc?: string } }>('/packing/quality-reject/undo', async (req, reply) => {
+    const dmc = req.body?.dmc ?? '';
+    if (!dmc) {
+      reply.status(400);
+      return { ok: false, error: 'dmc required' };
+    }
+    try {
+      const pool = await getPool();
+      const del = await pool
+        .request()
+        .input('dmc', dmc)
+        .query(`DELETE FROM dbo.Packed_Log_TEST WHERE DMC = @dmc AND Result = 'QUALITY_REJECT'`);
+      req.log.warn(`[packing] quality-reject UNDONE dmc=${dmc} removed=${del.rowsAffected[0]}`);
+      return { ok: true, dmc, removed: del.rowsAffected[0] };
+    } catch (e) {
+      req.log.error('[packing] unreject failed: ' + (e as Error).message);
+      reply.status(500);
+      return { ok: false, error: 'unreject failed' };
+    }
+  });
+
   // -- PACK (write) -------------------------------------------------------
   app.post<{ Body: ScanBody }>('/pack', async (req) => {
     await ensurePackingSeeded(); // rebuild pallet counts from DB before counting a new pack

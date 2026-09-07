@@ -9,11 +9,13 @@ import { GRADE_GROUPS } from '../lib/grades';
 import Pagination from '../components/Pagination';
 import ResultBadge from '../components/ResultBadge';
 import StateBadge from '../components/StateBadge';
+import { useAdminAuth } from '../lib/adminAuth';
 import ColumnFilter from '../components/ColumnFilter';
 import FailuresModal, { FailureType } from '../components/FailuresModal';
 import {
   fetchList,
   fetchListSummary,
+  undoQualityReject,
   fetchPlants,
   getExportUrl,
   formatDateTime,
@@ -226,6 +228,7 @@ function formatAge(mins: number): string {
 
 export default function Lists() {
   const navigate = useNavigate();
+  const { requireAdmin } = useAdminAuth();
   // Production date (07:00 rollover), matching the Dashboard — so "Today" on
   // both pages means the same production day, even in the 00:00–07:00 window.
   const today = getProductionDate();
@@ -833,6 +836,21 @@ export default function Lists() {
                       <td className="px-4 py-3 whitespace-nowrap">
                         <div className="inline-flex items-center gap-1.5">
                           <StateBadge state={row.state} />
+                          {row.state === 'QUALITY_REJECTED' && (
+                            <button
+                              onClick={() =>
+                                requireAdmin(() => {
+                                  void undoQualityReject(row.DMC || '')
+                                    .then(() => loadData())
+                                    .catch(() => undefined);
+                                })
+                              }
+                              title="Admin only — reverse this quality reject and make the part OK again"
+                              className="text-[11px] font-semibold px-2 py-0.5 rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                            >
+                              Make OK
+                            </button>
+                          )}
                           {isStaleInProgress(row) && (
                             <span
                               title={`No ring result recorded for over ${STALE_IN_PROGRESS_HOURS} hours - this part is not actively being inspected`}

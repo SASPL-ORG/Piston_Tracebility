@@ -535,6 +535,19 @@ export async function packScan(scan: string, reject = false): Promise<PackRespon
   return res.json();
 }
 
+// Undo a manual Quality Reject ("Make OK"). Admin-gated in the UI via
+// requireAdmin; removes the QUALITY_REJECT marker so the part returns to its
+// line state and can be packed again.
+export async function undoQualityReject(dmc: string): Promise<{ ok: boolean; removed?: number }> {
+  const res = await fetch(`${BASE_URL}/packing/quality-reject/undo`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dmc }),
+  });
+  if (!res.ok) throw new Error(`unreject failed: ${res.status}`);
+  return res.json();
+}
+
 // Live-mirror types — what the desktop /packing-live page consumes from
 // the backend ring buffer. Mirrors what the Zebra displayed at the
 // station so the desktop supervisor sees the same verdict.
