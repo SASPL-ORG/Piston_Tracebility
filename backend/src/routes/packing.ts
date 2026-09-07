@@ -166,6 +166,23 @@ async function alreadyPackedAt(dmc: string): Promise<string | null> {
   }
 }
 
+// True if this DMC carries a manual quality-reject marker (a Reject-mode scan
+// wrote a Packed_Log_TEST row with Result='QUALITY_REJECT'). Such a part must
+// never be packable, and shows as QUALITY_REJECTED in Lists until an admin
+// reverses it.
+async function isQualityRejected(dmc: string): Promise<boolean> {
+  try {
+    const pool = await getPool();
+    const r = await pool
+      .request()
+      .input('dmc', dmc)
+      .query(`SELECT TOP 1 1 AS x FROM dbo.Packed_Log_TEST WHERE DMC = @dmc AND Result = 'QUALITY_REJECT'`);
+    return r.recordset.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Live event mirror (README_DESKTOP_PACKING_PAGE.md)
 //
@@ -203,7 +220,8 @@ export type PackingResult =
   | 'RING_REJECTED'
   | 'CIRCLIP_SCRAP'
   | 'LOOKUP_ERROR'
-  | 'PALLET_FULL';
+  | 'PALLET_FULL'
+  | 'QUALITY_REJECTED';
 
 const MAX_EVENTS = 50;
 const ringBuffer: PackingEvent[] = [];
@@ -523,7 +541,7 @@ async function persistPackingEvent(ev: PackingEvent): Promise<void> {
 function coerceEvent(body: Partial<PackingEvent> | null | undefined): PackingEvent {
   const VALID_RESULTS: ReadonlySet<string> = new Set<PackingResult>([
     'PACKED_OK','WRONG_GRADE','ALREADY_PACKED','NOT_PROCESSED','IN_PROCESS',
-    'RING_REJECTED','CIRCLIP_SCRAP','LOOKUP_ERROR',
+    'RING_REJECTED','CIRCLIP_SCRAP','LOOKUP_ERROR','QUALITY_REJECTED',
   ]);
   const result = (body?.result && VALID_RESULTS.has(body.result))
     ? (body.result as PackingResult)
@@ -603,6 +621,14 @@ export default async function packingRoutes(app: FastifyInstance) {
         return resp;
       }
 
+      // Manual quality reject blocks packing regardless of the line state
+      // (a COMPLETED / IN_PROGRESS part can be quality-rejected earlier).
+      if (await isQualityRejected(dmc)) {
+        const msg = 'Quality rejected — do not pack.';
+        mirrorServerOutcome({ req, dmc, grade, result: 'QUALITY_REJECTED', ok: false, message: msg });
+        return { result: 'QUALITY_REJECTED' as const, packable: false, dmc, grade, packedAt: null, message: msg, ...partInfo };
+      }
+
       switch (state) {
         case 'PACKED':
         case 'RING_OK':
@@ -642,22 +668,36 @@ export default async function packingRoutes(app: FastifyInstance) {
     try {
       const pool = await getPool();
 
-      // REJECTED mode: accept any scan, log to the reject pile, no checks.
+      // REJECTED mode: mark the scanned part as a manual Quality Reject
+      // (Result='QUALITY_REJECT') so it can never be packed and shows as
+      // QUALITY_REJECTED in Lists. Strict rule: never reject an already-packed
+      // part — the operator must be told it's packed instead.
       if (reject) {
         const dmc = stripDmcSeparators(scan) || null;
+        const pCode = pCodeOf(scan);
+        if (dmc) {
+          const prior = await alreadyPackedAt(dmc);
+          if (prior) {
+            const msg = `Can't reject — already packed at ${prior}.`;
+            mirrorServerOutcome({ req, dmc, grade: pCode, result: 'ALREADY_PACKED', ok: false, message: msg });
+            return { result: 'ALREADY_PACKED', ok: false, dmc, packedAt: prior, message: msg };
+          }
+        }
         const ins = await pool
           .request()
           .input('dmc', dmc)
           .input('raw', scan)
           .input('grade', 'REJECT')
-          .input('p', pCodeOf(scan))
-          .input('res', 'REJECT_LOGGED')
+          .input('p', pCode)
+          .input('res', 'QUALITY_REJECT')
           .query(
             `INSERT INTO dbo.Packed_Log_TEST (DMC, Raw_Scan, Grade, P_Code, Result, Is_Reject)
              OUTPUT INSERTED.Packed_At AS Packed_At
              VALUES (@dmc, @raw, @grade, @p, @res, 1)`,
           );
-        return { result: 'PACKED_OK', ok: true, dmc, packedAt: serializeDateTime(ins.recordset[0].Packed_At), message: 'Reject logged.' };
+        const at = serializeDateTime(ins.recordset[0].Packed_At);
+        mirrorServerOutcome({ req, dmc, grade: pCode, result: 'QUALITY_REJECTED', ok: true, message: 'Quality rejected.' });
+        return { result: 'QUALITY_REJECTED', ok: true, dmc, packedAt: at, message: 'Quality rejected.' };
       }
 
       // Normal pack: re-resolve + re-check packable, then insert.

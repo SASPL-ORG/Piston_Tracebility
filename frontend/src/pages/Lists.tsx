@@ -60,7 +60,7 @@ const TYPE_OPTIONS: { value: ListType; label: string }[] = [
 
 // Column-filter option lists — these must match the backend's allow-list
 // (STATE_VALUES, RESULT_VALUES in backend/src/routes/lists.ts).
-const STATE_FILTER_OPTIONS = (['PACKED', 'RING_OK', 'RING_NG', 'CIRCLIP_SCRAP', 'IN_PROGRESS', 'ABORTED'] as PartState[]).map(
+const STATE_FILTER_OPTIONS = (['PACKED', 'RING_OK', 'RING_NG', 'CIRCLIP_SCRAP', 'IN_PROGRESS', 'ABORTED', 'QUALITY_REJECTED'] as PartState[]).map(
   (s) => ({ value: s, label: PART_STATE_LABEL[s] }),
 );
 const RESULT_FILTER_OPTIONS = [

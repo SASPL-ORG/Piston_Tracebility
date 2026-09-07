@@ -25,7 +25,13 @@ export type PartState =
   // circlip station (no circlip data). It was picked / faulted at loading, so
   // it is NOT genuinely in progress. Split out per the client's rule: a piston
   // only counts as IN_PROGRESS once it has reached circlip assembly.
-  | 'ABORTED';
+  | 'ABORTED'
+  // QUALITY_REJECTED — an operator scanned this part in the Zebra's Reject
+  // mode. It's a manual quality reject (marker row in Packed_Log_TEST,
+  // Result='QUALITY_REJECT') that blocks packing and overrides the line
+  // state in Lists. Reversible by an admin ("Make OK"). A part that's
+  // already PACKED can never be quality-rejected (the scanner refuses it).
+  | 'QUALITY_REJECTED';
 
 export interface SamLogRowForState {
   Circlip_Result: string | null;
@@ -207,6 +213,15 @@ export const PACKED_LOG_JOIN_SQL = `
   LEFT JOIN (
     SELECT DISTINCT DMC FROM dbo.Packed_Log_TEST WITH (NOLOCK) WHERE Is_Reject = 0
   ) pl ON pl.DMC = l.DMC`;
+
+// Quality-reject marker join — surfaces qr.DMC per DMC that an operator
+// manually rejected in the Zebra's Reject mode (Result='QUALITY_REJECT').
+// Lists uses it to override the derived state to 'QUALITY_REJECTED'. Pair
+// with the CASE-wrapper in the Lists CTE. Expects `l` (latest SAM_Log) in scope.
+export const QUALITY_REJECT_JOIN_SQL = `
+  LEFT JOIN (
+    SELECT DISTINCT DMC FROM dbo.Packed_Log_TEST WITH (NOLOCK) WHERE Result = 'QUALITY_REJECT'
+  ) qr ON qr.DMC = l.DMC`;
 
 // Display-level state — splits STATE_CASE_SQL's 'PACKED' into either
 // 'PACKED' (Zebra-packed) or 'COMPLETED' (line-finished but not yet

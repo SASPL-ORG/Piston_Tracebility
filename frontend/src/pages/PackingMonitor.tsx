@@ -43,6 +43,7 @@ const VERDICT_STYLE: Record<
   RING_REJECTED:   { bg: 'bg-red-600',     fg: 'text-white',       Icon: XCircle,       title: 'DO NOT PACK' },
   CIRCLIP_SCRAP:   { bg: 'bg-red-600',     fg: 'text-white',       Icon: XCircle,       title: 'DO NOT PACK' },
   LOOKUP_ERROR:    { bg: 'bg-amber-400',   fg: 'text-amber-950',   Icon: AlertTriangle, title: "CAN'T VERIFY" },
+  QUALITY_REJECTED:{ bg: 'bg-orange-600',  fg: 'text-white',       Icon: XCircle,       title: 'QUALITY REJECTED' },
 };
 
 function rowTint(result: PackingResult): string {
@@ -55,6 +56,7 @@ function rowTint(result: PackingResult): string {
     case 'CIRCLIP_SCRAP':  return 'bg-red-50';
     case 'ALREADY_PACKED':
     case 'LOOKUP_ERROR':   return 'bg-amber-50';
+    case 'QUALITY_REJECTED': return 'bg-orange-50';
   }
 }
 
@@ -419,6 +421,7 @@ function VerdictPill({ result }: { result: PackingResult }) {
     RING_REJECTED:  { label: 'RING REJECTED',  cls: 'bg-red-100 text-red-800' },
     CIRCLIP_SCRAP:  { label: 'CIRCLIP SCRAP',  cls: 'bg-red-100 text-red-800' },
     LOOKUP_ERROR:   { label: "CAN'T VERIFY",   cls: 'bg-amber-100 text-amber-900' },
+    QUALITY_REJECTED:{ label: 'QUALITY REJECTED', cls: 'bg-orange-100 text-orange-800' },
   };
   const m = map[result];
   return (

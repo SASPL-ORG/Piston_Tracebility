@@ -30,7 +30,8 @@ export type PartState =
   | 'RING_NG'
   | 'CIRCLIP_SCRAP'
   | 'IN_PROGRESS'
-  | 'ABORTED';    // Only a loading scan; never reached circlip assembly (picked/faulted at loading)
+  | 'ABORTED'    // Only a loading scan; never reached circlip assembly (picked/faulted at loading)
+  | 'QUALITY_REJECTED'; // Operator quality-rejected the part in the Zebra Reject mode
 
 export interface SamLogRecord {
   Date_Time: string | null;
@@ -476,7 +477,8 @@ export type VerifyResult =
   | 'IN_PROCESS'
   | 'RING_REJECTED'
   | 'CIRCLIP_SCRAP'
-  | 'LOOKUP_ERROR';
+  | 'LOOKUP_ERROR'
+  | 'QUALITY_REJECTED';
 
 export interface VerifyResponse {
   result: VerifyResult;
@@ -544,7 +546,8 @@ export type PackingResult =
   | 'IN_PROCESS'
   | 'RING_REJECTED'
   | 'CIRCLIP_SCRAP'
-  | 'LOOKUP_ERROR';
+  | 'LOOKUP_ERROR'
+  | 'QUALITY_REJECTED';
 
 export interface PackingEvent {
   ts: string;
@@ -772,6 +775,7 @@ export const PART_STATE_LABEL: Record<PartState, string> = {
   CIRCLIP_SCRAP: 'Snap Ring Scrap',
   IN_PROGRESS: 'In Progress',
   ABORTED: 'DMC OK',
+  QUALITY_REJECTED: 'Quality Rejected',
 };
 
 // Display-time rename of the customer's plant. The DB column SAM_Log.Plant_Id

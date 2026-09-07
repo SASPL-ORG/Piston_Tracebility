@@ -32,6 +32,7 @@ const STATE_COLORS: Record<PartState, string> = {
   RING_NG: '#ef4444',      // red
   CIRCLIP_SCRAP: '#b91c1c',// deeper red
   ABORTED: '#f97316',      // orange — loading-only, never reached circlip
+  QUALITY_REJECTED: '#c2410c', // burnt orange — operator quality reject
 };
 
 function formatBucketTick(value: string, granularity: ProductionGranularity): string {

@@ -171,6 +171,10 @@ export default function Packing() {
           if (p.ok) {
             setOutcome({ kind: 'reject_logged' });
             tickOk();
+          } else if (p.result === 'ALREADY_PACKED') {
+            // Strict rule: a packed part cannot be quality-rejected.
+            setOutcome({ kind: 'already_packed', msg: p.message });
+            beepError();
           } else {
             setOutcome({ kind: 'cant_verify', msg: p.message });
             beepError();
@@ -329,7 +333,7 @@ export default function Packing() {
       case 'ok_packed':
         return { bg: 'bg-emerald-500', fg: 'text-white', Icon: CheckCircle2, title: 'OK — PACKED', sub: `Grade ${outcome.grade} — verified and packed.` };
       case 'reject_logged':
-        return { bg: 'bg-emerald-600', fg: 'text-white', Icon: CheckCircle2, title: 'REJECT LOGGED', sub: 'Logged to the reject pile (grade not checked).' };
+        return { bg: 'bg-orange-600', fg: 'text-white', Icon: XCircle, title: 'QUALITY REJECTED', sub: 'Marked as a quality reject — this part can no longer be packed.' };
       case 'already_packed':
         return { bg: 'bg-amber-400', fg: 'text-amber-950', Icon: AlertTriangle, title: 'ALREADY PACKED', sub: outcome.msg };
       case 'do_not_pack':

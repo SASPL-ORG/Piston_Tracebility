@@ -6,6 +6,7 @@ import {
   STATE_CASE_SQL,
   STATE_CASE_SQL_DISPLAY,
   PACKED_LOG_JOIN_SQL,
+  QUALITY_REJECT_JOIN_SQL,
   CIRCLIP_REINSPECTED_SQL,
   rejectionReasonSql,
   isRejectionReason,
@@ -217,7 +218,7 @@ function buildInClause(
   return `(${parts.join(' OR ')})`;
 }
 
-const STATE_VALUES = ['PACKED', 'COMPLETED', 'RING_OK', 'RING_NG', 'CIRCLIP_SCRAP', 'IN_PROGRESS', 'ABORTED'] as const;
+const STATE_VALUES = ['PACKED', 'COMPLETED', 'RING_OK', 'RING_NG', 'CIRCLIP_SCRAP', 'IN_PROGRESS', 'ABORTED', 'QUALITY_REJECTED'] as const;
 const RESULT_VALUES = ['PASS', 'FAIL', 'BLANK'] as const;
 
 function buildBaseCte(query: ListQuery, request: import('mssql').Request): string {
@@ -273,7 +274,7 @@ function classifiedSelect(): string {
       COALESCE(l.Circlip_Time, p.first_pass_circlip_time, p.first_fail_circlip_time) AS Circlip_Time,
       l.Ring_Result, l.Ring_Time, l.Ring_Count, l.Unloading_Time, l.Result,
       l.Circlip_Rejection_Reason, l.Ring_Rejection_Reason,
-      ${STATE_CASE_SQL_DISPLAY} AS state,
+      CASE WHEN qr.DMC IS NOT NULL THEN 'QUALITY_REJECTED' ELSE (${STATE_CASE_SQL_DISPLAY}) END AS state,
       p.max_ring_count AS total_attempts,
       p.has_circlip_fail,
       p.has_circlip_pass,
@@ -284,6 +285,7 @@ function classifiedSelect(): string {
     FROM latest l
     INNER JOIN per_dmc p ON p.DMC = l.DMC
     ${PACKED_LOG_JOIN_SQL}
+    ${QUALITY_REJECT_JOIN_SQL}
   ) AS x`;
 }
 

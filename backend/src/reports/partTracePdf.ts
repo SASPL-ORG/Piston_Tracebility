@@ -12,6 +12,7 @@ const STATE_LABEL: Record<PartState, string> = {
   CIRCLIP_SCRAP: 'Snap Ring Scrap',
   IN_PROGRESS: 'In Progress',
   ABORTED: 'DMC OK',
+  QUALITY_REJECTED: 'Quality Rejected',
 };
 
 const COLOR = {

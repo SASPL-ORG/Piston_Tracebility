@@ -13,6 +13,9 @@ const STATE_STYLE: Record<PartState, string> = {
   // Aborted = only a loading scan, never reached circlip assembly (picked/faulted
   // at loading). Amber/orange so it reads as "not a real reject, just abandoned".
   ABORTED: 'bg-amber-50 text-amber-700 border-amber-200',
+  // Quality Rejected = operator manually rejected in the Zebra Reject mode.
+  // Strong orange so it stands apart from a line ring/circlip reject (red).
+  QUALITY_REJECTED: 'bg-orange-100 text-orange-800 border-orange-300',
 };
 
 export default function StateBadge({ state }: { state: PartState }) {
