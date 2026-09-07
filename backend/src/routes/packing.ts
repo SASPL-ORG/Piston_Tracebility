@@ -3,6 +3,7 @@ import { getPool } from '../db/connection.js';
 import { classifyState, hasCirclipRejection, stripDmcSeparators, canonicalizeDmcScan, DMC_SEPARATOR_CHARS } from '../db/state.js';
 import { serializeDateTime } from '../db/datetime.js';
 import { classifyShift, type ShiftId } from '../config/shifts.js';
+import { clearResponseCache } from '../utils/responseCache.js';
 import type { SamLogRecord } from '../types/index.js';
 
 // Packing-station verification + pack signal (README_MOBILE_SCANNER.md).
@@ -676,6 +677,10 @@ export default async function packingRoutes(app: FastifyInstance) {
         .request()
         .input('dmc', dmc)
         .query(`DELETE FROM dbo.Packed_Log_TEST WHERE DMC = @dmc AND Result = 'QUALITY_REJECT'`);
+      // Bust the SWR cache so the very next /list, /summary and /dashboard
+      // fetch recomputes — otherwise the part keeps showing QUALITY_REJECTED
+      // from the 30s cache and the operator thinks "Make OK" did nothing.
+      clearResponseCache();
       req.log.warn(`[packing] quality-reject UNDONE dmc=${dmc} removed=${del.rowsAffected[0]}`);
       return { ok: true, dmc, removed: del.rowsAffected[0] };
     } catch (e) {
@@ -730,6 +735,8 @@ export default async function packingRoutes(app: FastifyInstance) {
              VALUES (@dmc, @raw, @grade, @p, @res, 1)`,
           );
         const at = serializeDateTime(ins.recordset[0].Packed_At);
+        // Bust the SWR cache so the reject shows in Lists immediately.
+        clearResponseCache();
         mirrorServerOutcome({ req, dmc, grade: pCode, result: 'QUALITY_REJECTED', ok: true, message: 'Quality rejected.' });
         return { result: 'QUALITY_REJECTED', ok: true, dmc, packedAt: at, message: 'Quality rejected.' };
       }
@@ -832,6 +839,9 @@ export default async function packingRoutes(app: FastifyInstance) {
             packingNumber: after.packingNumber,
           });
         }
+        // Bust the SWR cache so the freshly-packed part shows as PACKED in
+        // Lists/Dashboard immediately instead of after the 30s cache window.
+        clearResponseCache();
         mirrorServerOutcome({ req, dmc, grade: pCode, result: 'PACKED_OK', ok: true, message: 'OK — packed.' });
         return {
           result: 'PACKED_OK',
