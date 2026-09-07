@@ -698,8 +698,17 @@ export default async function packingRoutes(app: FastifyInstance) {
       // QUALITY_REJECTED in Lists. Strict rule: never reject an already-packed
       // part — the operator must be told it's packed instead.
       if (reject) {
-        const dmc = stripDmcSeparators(scan) || null;
+        // Key the Quality-Reject marker on the CANONICAL stored DMC — the same
+        // separator-form key the line writes to SAM_Log and that Lists joins on
+        // (qr.DMC = l.DMC). The raw Zebra scan is separator-stripped, so keying
+        // on it wrote a non-matching DMC and the reject never surfaced in Lists.
+        // Fall back to the stripped scan only for a fresh part not yet on the line.
+        let dmc = stripDmcSeparators(scan) || null;
         const pCode = pCodeOf(scan);
+        try {
+          const recs = await fetchByScan(scan);
+          if (recs.length > 0) dmc = storedKey(recs);
+        } catch { /* keep stripped-scan fallback */ }
         if (dmc) {
           const prior = await alreadyPackedAt(dmc);
           if (prior) {
