@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { Download, ExternalLink, RotateCw, RotateCcw } from 'lucide-react';
 import clsx from 'clsx';
 import DateRangePicker from '../components/DateRangePicker';
-import { getProductionDate } from '../lib/shifts';
+import { getProductionDate, shiftPresetsFor } from '../lib/shifts';
 import { GRADE_GROUPS } from '../lib/grades';
 import Pagination from '../components/Pagination';
 import ResultBadge from '../components/ResultBadge';
@@ -74,12 +74,6 @@ const RESULT_FILTER_OPTIONS = [
 // SHIFT_CASE_SQL boundaries on the backend. Clicking a shift button fills
 // the From/To hour inputs with the corresponding window; the operator can
 // then narrow further (e.g. 08:00–10:00 inside Shift A).
-const SHIFT_PRESETS: Record<ShiftScope, { from: string; to: string }> = {
-  all: { from: '', to: '' },
-  A: { from: '07:00', to: '15:30' },
-  B: { from: '15:31', to: '23:59' },
-  C: { from: '00:00', to: '06:59' },
-};
 const SHIFT_BUTTONS: { value: ShiftScope; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'A', label: 'Shift A' },
@@ -87,16 +81,15 @@ const SHIFT_BUTTONS: { value: ShiftScope; label: string }[] = [
   { value: 'C', label: 'Shift C' },
 ];
 
-// After the operator edits the From/To inputs, figure out which shift
-// button (if any) still matches. Lets us keep the highlight in sync so
-// "Shift A" stays lit when From/To equals 07:00/15:30 and goes "All"
-// (un-highlighted) when both inputs are empty. Custom time windows
-// inside a shift drop the highlight — there's no false claim of
-// "this is Shift A" when it's really 08:00–10:00.
-function matchingShift(from: string, to: string): ShiftScope {
+// After the operator edits the From/To inputs, figure out which shift button
+// (if any) still matches — keeps the highlight in sync. Uses the presets for
+// the selected DATE, so past dates match the old shift windows and today the
+// new ones. Custom windows inside a shift drop the highlight.
+function matchingShift(from: string, to: string, dateStr: string): ShiftScope {
   if (!from && !to) return 'all';
+  const presets = shiftPresetsFor(dateStr);
   for (const id of ['A', 'B', 'C'] as const) {
-    const p = SHIFT_PRESETS[id];
+    const p = presets[id];
     if (p.from === from && p.to === to) return id;
   }
   return 'all';
@@ -369,19 +362,19 @@ export default function Lists() {
   // afterwards keeps the visual shift highlight in sync via matchingShift.
   const onShiftClick = (next: ShiftScope) => {
     setShift(next);
-    const preset = SHIFT_PRESETS[next];
+    const preset = shiftPresetsFor(from)[next];
     setTimeFrom(preset.from);
     setTimeTo(preset.to);
     setPage(1);
   };
   const onTimeFromChange = (v: string) => {
     setTimeFrom(v);
-    setShift(matchingShift(v, timeTo));
+    setShift(matchingShift(v, timeTo, from));
     setPage(1);
   };
   const onTimeToChange = (v: string) => {
     setTimeTo(v);
-    setShift(matchingShift(timeFrom, v));
+    setShift(matchingShift(timeFrom, v, from));
     setPage(1);
   };
 

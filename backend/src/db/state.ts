@@ -282,15 +282,18 @@ export function bindProductionDayFilterInputs(
   filters: DmcFilter,
 ): string[] {
   const conds: string[] = [];
+  // Production-day boundary moved 07:00 → 08:00 on SHIFT_RULE_CHANGE_DATE.
+  // Chosen per selected date so a past day keeps its original 07:00 window.
+  const boundary = (d: string) => (d >= SHIFT_RULE_CHANGE_DATE ? '08:00:00' : '07:00:00');
   if (filters.from) {
     conds.push('Date_Time >= @prod_start');
-    request.input('prod_start', `${filters.from} 07:00:00`);
+    request.input('prod_start', `${filters.from} ${boundary(filters.from)}`);
   }
   if (filters.to) {
-    // Half-open upper bound: (to + 1 day) 07:00 — so the inclusive "to" date
-    // covers its own Shift C all the way into the next morning.
+    // Half-open upper bound: (to + 1 day) at that day's boundary — so the
+    // inclusive "to" date covers its own Shift C into the next morning.
     conds.push("Date_Time < DATEADD(DAY, 1, @prod_end_anchor)");
-    request.input('prod_end_anchor', `${filters.to} 07:00:00`);
+    request.input('prod_end_anchor', `${filters.to} ${boundary(filters.to)}`);
   }
   if (filters.plant) {
     conds.push('Plant_Id = @plant');
@@ -300,20 +303,38 @@ export function bindProductionDayFilterInputs(
   return conds;
 }
 
-// Shift classification by latest-row Date_Time hour-of-day. Used in
-// combination with bindProductionDayFilterInputs so the windows align with
-// the production-day boundaries:
-//   Shift A: 07:00 – 15:30  ([420, 931))
-//   Shift B: 15:31 – 23:59  ([931, 1440))
-//   Shift C: 00:00 – 06:59  ([0, 420))
-// Inside the production-day window for date X, Shift C's pre-07:00 portion
-// belongs to X (not X+1) because of the production-day boundary.
-export const SHIFT_CASE_SQL = `CASE
-  WHEN (DATEPART(HOUR, l.Date_Time) * 60 + DATEPART(MINUTE, l.Date_Time)) >= 420
-   AND (DATEPART(HOUR, l.Date_Time) * 60 + DATEPART(MINUTE, l.Date_Time)) <  931 THEN 'A'
-  WHEN (DATEPART(HOUR, l.Date_Time) * 60 + DATEPART(MINUTE, l.Date_Time)) >= 931 THEN 'B'
-  ELSE 'C'
-END`;
+// Shift timings CHANGED on 2026-09-08. Classification is DATE-DEPENDENT so
+// historical records are never re-bucketed ("do not disturb the past records"):
+//   • Records BEFORE 2026-09-08 — OLD shifts:
+//       A 07:00–15:30 [420,931), B 15:31–23:59 [931,1440), C 00:00–06:59 [0,420)
+//   • Records FROM 2026-09-08 — NEW shifts:
+//       A 08:00–16:30 [480,990), B 16:30–00:30 ([990,1440)∪[0,30), wraps midnight),
+//       C 00:30–08:00 [30,480)
+// The production-day boundary moved from 07:00 to 08:00 on the same date — see
+// bindProductionDayFilterInputs. Date-string compares work lexicographically
+// on the 'YYYY-MM-DD' CAST.
+export const SHIFT_RULE_CHANGE_DATE = '2026-09-08';
+
+// Build the date-dependent A/B/C CASE for a Date_Time column (l.Date_Time or
+// the raw column). Single source of truth for both per-DMC and event-level.
+function shiftCaseFor(col: string): string {
+  const min = `(DATEPART(HOUR, ${col}) * 60 + DATEPART(MINUTE, ${col}))`;
+  return `CASE WHEN CAST(${col} AS DATE) >= '${SHIFT_RULE_CHANGE_DATE}' THEN
+      CASE
+        WHEN ${min} >= 480 AND ${min} < 990 THEN 'A'
+        WHEN ${min} >= 990 OR ${min} < 30 THEN 'B'
+        ELSE 'C'
+      END
+    ELSE
+      CASE
+        WHEN ${min} >= 420 AND ${min} < 931 THEN 'A'
+        WHEN ${min} >= 931 THEN 'B'
+        ELSE 'C'
+      END
+  END`;
+}
+
+export const SHIFT_CASE_SQL = shiftCaseFor('l.Date_Time');
 
 // Outer-WHERE fragment for the shift toggle. Returns `1 = 1` when shift is
 // undefined ("All" scope). When a specific shift is requested, this filters
@@ -329,15 +350,9 @@ export function shiftWhereSql(shift: 'A' | 'B' | 'C' | undefined): string {
   return `${SHIFT_CASE_SQL} = '${shift}'`;
 }
 
-// Same logic as SHIFT_CASE_SQL but references a raw Date_Time column instead
-// of `l.Date_Time` — for use against `dbo.SAM_Log` directly when we want
-// event-level (rather than per-DMC) counts to match HMI semantics.
-const SHIFT_CASE_SQL_RAW = `CASE
-  WHEN (DATEPART(HOUR, Date_Time) * 60 + DATEPART(MINUTE, Date_Time)) >= 420
-   AND (DATEPART(HOUR, Date_Time) * 60 + DATEPART(MINUTE, Date_Time)) <  931 THEN 'A'
-  WHEN (DATEPART(HOUR, Date_Time) * 60 + DATEPART(MINUTE, Date_Time)) >= 931 THEN 'B'
-  ELSE 'C'
-END`;
+// Same date-dependent logic against the raw Date_Time column (event-level,
+// not per-DMC) — for direct dbo.SAM_Log counts that match HMI semantics.
+const SHIFT_CASE_SQL_RAW = shiftCaseFor('Date_Time');
 
 export function shiftWhereSqlRaw(shift: 'A' | 'B' | 'C' | undefined): string {
   if (!shift) return '1 = 1';

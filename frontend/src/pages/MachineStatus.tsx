@@ -16,6 +16,7 @@ import clsx from 'clsx';
 import DateRangePicker from '../components/DateRangePicker';
 import MachineSelector from '../components/MachineSelector';
 import MachineTimeline from '../components/MachineTimeline';
+import { shiftPresetsFor } from '../lib/shifts';
 import {
   fetchMachineStatus,
   fetchPlants,
@@ -26,13 +27,6 @@ import {
   ShiftScope,
 } from '../lib/api';
 
-// Same shift preset windows the rest of the app uses (lists.ts / failures modal).
-const SHIFT_PRESETS: Record<ShiftScope, { from: string; to: string }> = {
-  all: { from: '', to: '' },
-  A: { from: '07:00', to: '15:30' },
-  B: { from: '15:31', to: '23:59' },
-  C: { from: '00:00', to: '06:59' },
-};
 const SHIFT_BUTTONS: { value: ShiftScope; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'A', label: 'Shift A' },
@@ -40,10 +34,12 @@ const SHIFT_BUTTONS: { value: ShiftScope; label: string }[] = [
   { value: 'C', label: 'Shift C' },
 ];
 
-function matchingShift(from: string, to: string): ShiftScope {
+// Date-aware: past dates match the old shift windows, today the new ones.
+function matchingShift(from: string, to: string, dateStr: string): ShiftScope {
   if (!from && !to) return 'all';
+  const presets = shiftPresetsFor(dateStr);
   for (const id of ['A', 'B', 'C'] as const) {
-    const p = SHIFT_PRESETS[id];
+    const p = presets[id];
     if (p.from === from && p.to === to) return id;
   }
   return 'all';
@@ -263,12 +259,12 @@ export default function MachineStatus() {
 
   const onShiftClick = (next: ShiftScope) => {
     setShift(next);
-    const preset = SHIFT_PRESETS[next];
+    const preset = shiftPresetsFor(from)[next];
     setHourFrom(preset.from);
     setHourTo(preset.to);
   };
-  const onHourFromChange = (v: string) => { setHourFrom(v); setShift(matchingShift(v, hourTo)); };
-  const onHourToChange = (v: string) => { setHourTo(v); setShift(matchingShift(hourFrom, v)); };
+  const onHourFromChange = (v: string) => { setHourFrom(v); setShift(matchingShift(v, hourTo, from)); };
+  const onHourToChange = (v: string) => { setHourTo(v); setShift(matchingShift(hourFrom, v, from)); };
   const handleDateChange = (newFrom: string, newTo: string, newPlant: string) => {
     setFrom(newFrom); setTo(newTo); setPlant(newPlant);
   };

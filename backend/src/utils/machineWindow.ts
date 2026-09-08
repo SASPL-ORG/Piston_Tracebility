@@ -12,19 +12,29 @@
 
 export type Shift = 'A' | 'B' | 'C';
 
-// Minute-of-day half-open windows. Match the SQL inclusive-BETWEEN
-// semantics in backend/src/routes/lists.ts (A: 07:00–15:30, B:
-// 15:31–23:59, C: 00:00–06:59) — the +1 on the upper bound below makes
-// them half-open in JS (15:31 → 931 is the first minute NOT in A).
-const SHIFT_HALF_OPEN: Record<Shift, { startMin: number; endMin: number }> = {
-  A: { startMin: 420,  endMin: 931 },   // 07:00 → 15:31  (covers 15:30)
-  B: { startMin: 931,  endMin: 1440 },  // 15:31 → 24:00  (covers 23:59)
-  C: { startMin: 0,    endMin: 420 },   // 00:00 → 07:00  (covers 06:59)
-};
+// Shift boundaries changed on 2026-09-08 (see db/state.ts). Date-aware so past
+// dates keep the old windows. Half-open minute-of-day; endMin > 1440 means the
+// window wraps past midnight (new Shift B: 16:30 → 00:30 next day).
+const SHIFT_RULE_CHANGE_DATE = '2026-09-08';
+function shiftWindowFor(shift: Shift, dateStr: string): { startMin: number; endMin: number } {
+  const NEW: Record<Shift, { startMin: number; endMin: number }> = {
+    A: { startMin: 480,  endMin: 990 },   // 08:00 → 16:30
+    B: { startMin: 990,  endMin: 1470 },  // 16:30 → 00:30 next day (wraps)
+    C: { startMin: 30,   endMin: 480 },   // 00:30 → 08:00
+  };
+  const OLD: Record<Shift, { startMin: number; endMin: number }> = {
+    A: { startMin: 420,  endMin: 931 },   // 07:00 → 15:31 (covers 15:30)
+    B: { startMin: 931,  endMin: 1440 },  // 15:31 → 24:00 (covers 23:59)
+    C: { startMin: 0,    endMin: 420 },   // 00:00 → 07:00 (covers 06:59)
+  };
+  return (dateStr >= SHIFT_RULE_CHANGE_DATE ? NEW : OLD)[shift];
+}
 
-// 07:00 — production-day boundary used by the dashboard / lists / summary
-// when no shift or hour filter narrows the window further.
-const PRODUCTION_DAY_START_MIN = 420;
+// Production-day boundary (07:00 before the change, 08:00 from 2026-09-08),
+// used when no shift or hour filter narrows the window further.
+function prodStartMin(dateStr: string): number {
+  return dateStr >= SHIFT_RULE_CHANGE_DATE ? 480 : 420;
+}
 
 export interface MachineWindowInputs {
   from?: string;        // 'YYYY-MM-DD'
@@ -96,10 +106,10 @@ export function resolveMachineWindow(inputs: MachineWindowInputs): ResolvedWindo
   const hourToMin = parseHourMin(inputs.hourTo);
   const hasHourFilter = hourFromMin !== null && hourToMin !== null;
 
-  let startMin = PRODUCTION_DAY_START_MIN;
-  let endMin = PRODUCTION_DAY_START_MIN; // production-day default: same minute, next day
+  let startMin = prodStartMin(from);
+  let endMin = prodStartMin(to); // production-day default: boundary minute, next day
   let startDate = from;
-  let endDate = addDays(to, 1); // next-day 07:00 for production-day default
+  let endDate = addDays(to, 1); // next-day boundary for production-day default
   let filtersIgnored = false;
 
   if (sameDay) {
@@ -111,7 +121,7 @@ export function resolveMachineWindow(inputs: MachineWindowInputs): ResolvedWindo
       endDate = (endMin > 1440 ? addDays(from, 1) : from);
       if (endMin > 1440) endMin -= 1440;
     } else if (shift) {
-      const win = SHIFT_HALF_OPEN[shift];
+      const win = shiftWindowFor(shift, from);
       startMin = win.startMin;
       endMin = win.endMin;
       startDate = from;

@@ -10,6 +10,8 @@ import {
   CIRCLIP_REINSPECTED_SQL,
   rejectionReasonSql,
   isRejectionReason,
+  shiftWhereSql,
+  shiftWhereSqlRaw,
 } from '../db/state.js';
 import { getOrComputeSWR } from '../utils/responseCache.js';
 import { hideCutoffCond } from '../utils/hideState.js';
@@ -24,15 +26,6 @@ import type {
   PartListItem,
 } from '../types/index.js';
 
-// Shift → time-of-day window in minutes-of-day. Mirrors the frontend
-// SHIFT_PRESETS in src/pages/Lists.tsx and the SHIFT_CASE_SQL boundaries
-// in db/state.ts. Used by /lists/failures to translate shift=A|B|C|all
-// into the same hour filter the Lists table uses.
-const SHIFT_WINDOWS: Record<'A' | 'B' | 'C', { fromMin: number; toMin: number }> = {
-  A: { fromMin: 7 * 60,        toMin: 15 * 60 + 30 },  // 07:00 – 15:30
-  B: { fromMin: 15 * 60 + 31,  toMin: 23 * 60 + 59 },  // 15:31 – 23:59
-  C: { fromMin: 0,             toMin: 6 * 60 + 59 },   // 00:00 – 06:59
-};
 
 // Sort whitelist — these are columns on the latest row plus derived columns.
 // The values map to the SQL column name in the inner SELECT.
@@ -620,13 +613,12 @@ export default async function listRoutes(app: FastifyInstance) {
     // The operator's From-hour/To-hour window is NOT applied here — it's
     // already folded into the absolute date range by bindListRange below,
     // so the modal counts exactly the span the page behind it shows.
-    const shiftWindow = shift === 'all' ? null : SHIFT_WINDOWS[shift];
-    const timeWhereOnL = shiftWindow
-      ? `(DATEPART(HOUR, l.Date_Time) * 60 + DATEPART(MINUTE, l.Date_Time)) BETWEEN ${shiftWindow.fromMin} AND ${shiftWindow.toMin}`
-      : '1 = 1';
-    const timeWhereRaw = shiftWindow
-      ? `(DATEPART(HOUR, Date_Time) * 60 + DATEPART(MINUTE, Date_Time)) BETWEEN ${shiftWindow.fromMin} AND ${shiftWindow.toMin}`
-      : '1 = 1';
+    // Use the date-dependent shift classifier (handles the new midnight-
+    // wrapping Shift B and keeps past records on the old boundaries) instead
+    // of a fixed minute-of-day BETWEEN window.
+    const shiftArg = shift === 'all' ? undefined : shift;
+    const timeWhereOnL = shiftWhereSql(shiftArg);
+    const timeWhereRaw = shiftWhereSqlRaw(shiftArg);
 
     const ROW_CAP = 1000;
     const pool = await getPool();
