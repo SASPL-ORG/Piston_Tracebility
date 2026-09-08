@@ -155,6 +155,14 @@ export async function scanIncomingOnce(
       (walkError ? ` walkError=${walkError}` : ''),
   );
   if (walkError) state.scanLastErrorMsg = walkError;
+  // Belt-and-braces against a lost wakeup: enqueuePath only notifies for
+  // NEWLY-added paths, so if a wake was missed (a notify fired in the tiny
+  // window between a worker finding the Set empty and parking), a file that's
+  // already pending is never re-notified and workers can sit parked forever
+  // — the silent stall that used to require a restart. Re-waking every parked
+  // worker whenever pending work exists makes that race harmless (≤ one scan
+  // interval of delay). Parked workers that find nothing eligible just re-park.
+  if (state.pending.size > 0) notifyWorkers();
   return { enqueued, skipped };
 }
 
@@ -366,14 +374,19 @@ export async function startImageWatcher(log: (msg: string) => void): Promise<nul
   state.watchdogTimer = setInterval(() => {
     const now = Date.now();
 
-    // Mode 1: workers stalled.
+    // Mode 1: workers stalled — RECOVER, don't just log. Waking every parked
+    // worker resolves the lost-wakeup race that used to require a manual
+    // restart; workers with nothing eligible simply re-park. Re-arm the
+    // idle clock so we don't spin this log every half-watchdog.
     const workerIdle = now - state.lastProcessedAt;
     if (state.pending.size > 0 && workerIdle > watchdogMs) {
       log(
         `[images] WATCHDOG workers stalled ${Math.round(workerIdle / 1000)}s, ` +
           `pending=${state.pending.size}, in_flight=${state.inFlightPaths.size}, ` +
-          `processed_total=${state.totalProcessed}, errors_total=${state.totalErrors}`,
+          `processed_total=${state.totalProcessed}, errors_total=${state.totalErrors} — waking workers`,
       );
+      notifyWorkers();
+      state.lastProcessedAt = now;
     }
 
     // Mode 2: scan timer dead. Recreate it.
