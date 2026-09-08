@@ -137,20 +137,48 @@ export async function scanIncomingOnce(
   }
   let walkError: string | null = null;
   let firstEntries = 0;
+  let scannedFolders = 0;
   try {
-    // Also check what the top-level readdir returns to detect bind-mount
-    // snapshot issues (the in-process scan returning 0 while a separate
-    // `find` shows 8000+ files).
     const tlEntries = await fs.readdir(cfg.incomingPath, { withFileTypes: true });
     firstEntries = tlEntries.length;
-    await walk(cfg.incomingPath, 0);
+    // Only walk RECENT session folders. /data/incoming accumulates 100k+
+    // mostly-empty per-part folders; recursing into all of them makes one scan
+    // take minutes, so the indexer stalls and new images never get processed.
+    // New images only ever land in recently-modified folders, so: collect the
+    // session dirs (CV-X names them YYMMDD_HHMMSS, monotonic), take the newest
+    // MAX_FOLDERS by name, and walk only those whose real mtime is within
+    // MAX_AGE. Old empties are ignored here (the daily retention job removes
+    // them). Non-session dirs / stray top-level files are always handled.
+    const maxFolders = Math.max(parseInt(process.env.IMAGE_SCAN_MAX_FOLDERS || '3000', 10), 100);
+    const maxAgeMs = Math.max(parseInt(process.env.IMAGE_SCAN_MAX_AGE_HOURS || '12', 10), 1) * 3600_000;
+    const cutoff = Date.now() - maxAgeMs;
+    const sessionDirs: string[] = [];
+    for (const ent of tlEntries) {
+      if (ent.name.startsWith('_hold') || ent.name.startsWith('_quarantine')) continue;
+      const p = cfg.incomingPath + '/' + ent.name;
+      if (ent.isDirectory()) {
+        if (/^\d{6}_\d{6}$/.test(ent.name)) sessionDirs.push(ent.name);
+        else await walk(p, 1); // non-session dir — structural, walk fully
+      } else if (/\.(jpg|bmp)$/i.test(ent.name)) {
+        if (enqueuePath(p)) enqueued++; else skipped++;
+      }
+    }
+    sessionDirs.sort(); // ascending — newest names last
+    for (const name of sessionDirs.slice(-maxFolders)) {
+      const p = cfg.incomingPath + '/' + name;
+      let mt = 0;
+      try { mt = (await fs.stat(p)).mtimeMs; } catch { continue; }
+      if (mt < cutoff) continue; // stale folder — skip the expensive recurse
+      await walk(p, 1);
+      scannedFolders++;
+    }
   } catch (err) {
     walkError = (err as Error).message;
   }
   // DEBUG: log every tick until the wedge is understood.
   log(
     `[images] scan tick #${state.scanTickCount}: topLevelEntries=${firstEntries} ` +
-      `enqueued=${enqueued} skipped=${skipped} ` +
+      `scannedFolders=${scannedFolders} enqueued=${enqueued} skipped=${skipped} ` +
       `pending=${state.pending.size} inFlight=${state.inFlightPaths.size}` +
       (walkError ? ` walkError=${walkError}` : ''),
   );
