@@ -1,7 +1,7 @@
 import cron, { ScheduledTask } from 'node-cron';
 import { startImageWatcher, stopImageWatcher } from './watcher.js';
 import { runPendingRetry } from './retry.js';
-import { runRetention } from './retention.js';
+import { runRetention, pruneEmptyIncomingFolders } from './retention.js';
 
 interface Logger {
   info: (msg: string) => void;
@@ -49,6 +49,11 @@ export async function startImageSubsystem(log: Logger): Promise<void> {
     try {
       const r = await runRetention();
       log.info(`[images] retention: deleted=${r.deleted} fileErrors=${r.fileErrors}`);
+      // Prune the accumulated empty per-part session folders from /data/incoming
+      // (only >2-day-old folders with zero files inside — no image data lost).
+      // Keeps the incoming tree small so the scanner stays fast.
+      const pr = await pruneEmptyIncomingFolders();
+      log.info(`[images] incoming prune: scanned=${pr.scanned} removedEmpty=${pr.removed}`);
     } catch (err) {
       log.error(`[images] retention job failed: ${(err as Error).message}`);
     } finally {
