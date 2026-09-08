@@ -187,11 +187,12 @@ function buildTypeWhere(type: string | undefined): string {
     case 'reinspected':
       return "(state IN ('PACKED','COMPLETED','RING_OK') AND (total_attempts > 1 OR max_circlip_count > 1 OR (has_circlip_fail = 1 AND has_circlip_pass = 1)))";
     default:
-      // 'all' (default view): hide DMC OK / ABORTED parts (loading scan only,
-      // never reached circlip assembly). They're still classified and stored;
-      // just not surfaced in the operator list. The explicit 'aborted' case
-      // above still returns them for any backend/API caller that asks.
-      return "state <> 'ABORTED'";
+      // 'all' (default view): show EVERY piston, including DMC OK / ABORTED
+      // (loading scan only, never reached circlip assembly). During line
+      // trials the operator needs to trace every scanned part — nothing is
+      // suppressed from the list, so a loaded-but-not-processed piston never
+      // silently disappears.
+      return '1 = 1';
   }
 }
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Package, CheckCircle, XCircle, AlertTriangle, Percent, RefreshCw, Clock, RotateCw, Images as ImagesIcon } from 'lucide-react';
+import { Package, CheckCircle, XCircle, AlertTriangle, Percent, RefreshCw, Clock, RotateCw, Ban, Images as ImagesIcon } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import clsx from 'clsx';
 import KpiCard from '../components/KpiCard';
@@ -129,9 +129,8 @@ export default function Dashboard() {
   };
 
   const stateData = (data?.state_breakdown ?? [])
-    // DMC OK (loading-only, never reached circlip) is intentionally hidden
-    // from the operator views — still classified/recorded in the backend.
-    .filter((s) => s.state !== 'ABORTED')
+    // Show every state, including DMC OK (loading-only). During trials the
+    // operator needs to see all scanned pistons, so nothing is filtered out.
     .map((s) => ({
       name: PART_STATE_LABEL[s.state],
       value: s.count,
@@ -231,6 +230,7 @@ export default function Dashboard() {
           <KpiCard title="Snap Ring Fail" value={data.kpis.circlip_fail.toLocaleString()} icon={XCircle} color="red" subtitle="Final fail (not saved)" />
           <KpiCard title="Ring Fail" value={data.kpis.ring_fail.toLocaleString()} icon={AlertTriangle} color="amber" subtitle="Final fail (not saved)" />
           <KpiCard title="In Progress" value={data.kpis.in_progress.toLocaleString()} icon={Clock} color="purple" subtitle="Ring not yet recorded" />
+          <KpiCard title="DMC OK" value={data.kpis.aborted.toLocaleString()} icon={Ban} color="orange" subtitle="Loading scan only — never reached circlip" />
           <KpiCard title="Snap Ring Re-inspection" value={data.kpis.circlip_reinspected.toLocaleString()} icon={RotateCw} color="indigo" subtitle="Saved by re-inspection" />
           <KpiCard title="Ring Re-inspection" value={data.kpis.ring_reinspected.toLocaleString()} icon={RotateCw} color="indigo" subtitle="Saved by re-inspection" />
           <KpiCard title="Pass Rate" value={`${data.kpis.pass_rate}%`} icon={Percent} color="slate" subtitle="Overall yield" />
