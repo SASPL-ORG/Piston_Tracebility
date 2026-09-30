@@ -388,6 +388,62 @@ async function ensurePackingNumberColumn(): Promise<boolean> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Persist which pallets the operator has closed ("Print & Complete") so a
+// backend RESTART doesn't resurrect a finished pallet as the active one — the
+// "why does the full pallet keep coming back?" bug. Same lazy-DDL posture as
+// ensurePackingNumberColumn: if the login can't CREATE the table, completion
+// persistence is silently disabled and the seed still applies its
+// chronological + skip-full heuristics (which already stop full pallets from
+// resurrecting).
+// ---------------------------------------------------------------------------
+let packingCompletedTableReady = false;
+let packingCompletedCreateAttempted = false;
+
+async function ensurePackingCompletedTable(): Promise<boolean> {
+  if (packingCompletedTableReady) return true;
+  if (packingCompletedCreateAttempted) return false;
+  packingCompletedCreateAttempted = true;
+  try {
+    const pool = await getPool();
+    await pool.request().query(`
+      IF OBJECT_ID('dbo.Packing_Completed', 'U') IS NULL
+        CREATE TABLE dbo.Packing_Completed (
+          Packing_Number NVARCHAR(20) NOT NULL PRIMARY KEY,
+          Completed_At DATETIME2 NOT NULL
+            CONSTRAINT DF_Packing_Completed_At DEFAULT SYSUTCDATETIME()
+        );
+    `);
+    packingCompletedTableReady = true;
+    return true;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[packing] Packing_Completed table unavailable — pallet completion not ' +
+        'persisted across restarts (seed still skips full pallets). Detail: ' +
+        (err as Error).message,
+    );
+    return false;
+  }
+}
+
+// Record a pallet as closed so the seed never re-activates it. Best-effort:
+// never throws (a failure just means the closure isn't persisted).
+async function markPalletCompleted(packingNumber: string): Promise<void> {
+  if (!packingNumber) return;
+  if (!(await ensurePackingCompletedTable())) return;
+  try {
+    const pool = await getPool();
+    await pool.request().input('n', packingNumber).query(`
+      IF NOT EXISTS (SELECT 1 FROM dbo.Packing_Completed WHERE Packing_Number = @n)
+        INSERT INTO dbo.Packing_Completed (Packing_Number) VALUES (@n);
+    `);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[packing] failed to persist completed pallet ' + packingNumber + ': ' + (err as Error).message);
+  }
+}
+
 // Rebuild the in-memory pack-progress + history from the permanent
 // Packed_Log_TEST on first use, so a backend RESTART never resets the pallet
 // counts (the bug the code's earlier comments anticipated). Runs once;
@@ -403,26 +459,45 @@ async function ensurePackingSeeded(): Promise<void> {
       const hasCol = await ensurePackingNumberColumn();
       if (!hasCol) { packingSeeded = true; return; }
       const pool = await getPool();
-      // Current pallet per grade = the highest Packing_Number for that P_Code,
-      // and how many OK packs it holds.
+      // Current pallet per grade = that grade's MOST RECENT pallet by pack time
+      // (NOT the highest Packing_Number: numbers are DDMMYYNN / day-first, so a
+      // string compare makes an August pallet outrank a September one and
+      // resurrects stale pallets after a restart — the "pallet full keeps coming
+      // back" bug).
       const grp = (await pool.request().query(`
-        SELECT P_Code, Packing_Number, COUNT(*) AS cnt
+        SELECT P_Code, Packing_Number, COUNT(*) AS cnt, MAX(Packed_At) AS lastAt
         FROM dbo.Packed_Log_TEST WITH (NOLOCK)
         WHERE ISNULL(Is_Reject,0)=0 AND Packing_Number IS NOT NULL AND P_Code IS NOT NULL
         GROUP BY P_Code, Packing_Number
-      `)).recordset as Array<{ P_Code: string; Packing_Number: string; cnt: number }>;
-      const latest: Record<string, { num: string; cnt: number }> = {};
+      `)).recordset as Array<{ P_Code: string; Packing_Number: string; cnt: number; lastAt: Date }>;
+      const latest: Record<string, { num: string; cnt: number; lastAt: number }> = {};
       let maxSeqToday = 0;
       const { dateKey, ddmmyy } = todayStringsServer();
       for (const r of grp) {
-        const g = String(r.P_Code); const num = String(r.Packing_Number); const cnt = Number(r.cnt);
-        if (!latest[g] || num > latest[g].num) latest[g] = { num, cnt };
+        const g = String(r.P_Code); const num = String(r.Packing_Number);
+        const cnt = Number(r.cnt); const lastAt = new Date(r.lastAt).getTime();
+        if (!latest[g] || lastAt > latest[g].lastAt) latest[g] = { num, cnt, lastAt };
         if (num.startsWith(ddmmyy)) {
           const nn = parseInt(num.slice(6), 10);
           if (Number.isFinite(nn) && nn > maxSeqToday) maxSeqToday = nn;
         }
       }
+      // Pallets the operator has explicitly closed — never resurrect these.
+      let completedSet = new Set<string>();
+      if (await ensurePackingCompletedTable()) {
+        try {
+          const cs = (await pool.request().query(
+            `SELECT Packing_Number FROM dbo.Packing_Completed`,
+          )).recordset as Array<{ Packing_Number: string }>;
+          completedSet = new Set(cs.map((r) => String(r.Packing_Number)));
+        } catch { /* treat as none completed */ }
+      }
       for (const [g, v] of Object.entries(latest)) {
+        // Don't bring a FINISHED pallet back as the active one after a restart:
+        // skip it if it's full (implicitly done) or was explicitly completed.
+        // Leaving the grade unset makes the next scan open a fresh pallet.
+        if (v.cnt >= PALLET_CAPACITY) continue;
+        if (completedSet.has(v.num)) continue;
         packingProgress.byGrade[g] = { packed: v.cnt, packingNumber: v.num };
       }
       packingProgress.dailyDate = dateKey;
@@ -1258,6 +1333,8 @@ export default async function packingRoutes(app: FastifyInstance) {
       // immediately after.
       const closedPacked = packingProgress.byGrade[foundGrade].packed;
       delete packingProgress.byGrade[foundGrade];
+      // Persist the closure so a backend restart's reseed won't resurrect it.
+      await markPalletCompleted(num);
       return {
         ok: true,
         completed: true,
